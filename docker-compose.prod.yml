@@ -1,0 +1,16 @@
+# Production docker-compose override
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+# This overrides the frontend to use production build (nginx)
+
+services:
+  frontend:
+    # Production mode: Built static files served by nginx
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: zoria-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    volumes: []  # Remove dev volumes
+    command: null  # Use default nginx command from Dockerfile
+    environment: []  # Remove dev environment

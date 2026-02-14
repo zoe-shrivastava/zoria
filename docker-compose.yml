@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zoria-postgres
+    environment:
+      POSTGRES_DB: zoria
+      POSTGRES_USER: zoria
+      POSTGRES_PASSWORD: zoria_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zoria"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zoria-backend
+    environment:
+      DATABASE_URL: postgresql://zoria:zoria_password@postgres:5432/zoria
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    # Development mode: Vite dev server with hot reload
+    image: node:18-alpine
+    container_name: zoria-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - zoria_frontend_node_modules:/app/node_modules  # Use named volume for node_modules
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      # Frontend runs in browser, not in container, so use public domain
+      # The browser (client-side) will make requests to the public API
+      - VITE_API_BASE=https://zoria-api.krishnabihari.com
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true  # Enable file watching in Docker
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: zoria-cloudflared
+    command: tunnel run
+    env_file:
+      - ./.env
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  uploads:
+  zoria_frontend_node_modules:  # Named volume for frontend node_modules

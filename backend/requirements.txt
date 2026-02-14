@@ -1,0 +1,39 @@
+# FastAPI and Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Database
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+
+# Authentication & Security
+PyJWT>=2.8.0
+bcrypt>=4.0.1
+python-dotenv>=1.0.0
+passlib[bcrypt]>=1.7.4
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2
+
+# OpenAI & Agents
+openai>=1.12.0
+openai-agents>=0.8.0
+pydantic[email]>=2.5.0
+
+# Vector Store & Embeddings
+pgvector>=0.2.0
+sentence-transformers>=2.2.0  # For local embeddings if needed
+tiktoken>=0.5.0  # For token counting in chunking
+numpy>=1.24.0  # For array operations in embeddings and similarity calculations
+
+# Utilities
+aiofiles>=23.2.1
+python-dateutil>=2.8.2
+aiohttp>=3.9.0  # For Ollama embedding API calls
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0

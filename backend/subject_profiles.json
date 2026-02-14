@@ -1,0 +1,152 @@
+{
+  "subjects": [
+    {
+      "subject_id": "mathematics",
+      "display_name": "Mathematics",
+      "version": "2.0",
+      "description": "Logical and quantitative reasoning, algebraic manipulation, geometry, calculus, and multi-step problem-solving.",
+      "question_generation": {
+        "preferred_question_types": [
+          "multiple_choice",
+          "numerical_input",
+          "multi_step_problem",
+          "word_problem",
+          "proof_reasoning",
+          "graph_based"
+        ],
+        "difficulty_levels": ["easy", "medium", "hard"],
+        "cognitive_levels": [
+          "recall",
+          "procedural",
+          "application",
+          "analysis",
+          "multi_step_reasoning",
+          "conceptual_integration"
+        ],
+        "steps_required_for_hard": true,
+        "allow_real_world_context": true,
+        "requires_unit_handling": true,
+        "hard_question_spec": {
+          "num_concepts": 2,
+          "num_steps": 3,
+          "requires_unit_conversion": true
+        }
+      },
+      "answer_format_rules": {
+        "allow_decimal": true,
+        "allow_fraction": true,
+        "precision_rules": {
+          "decimal_places": 2,
+          "tolerance": 0.01
+        },
+        "unit_required": false,
+        "latex_required_for_equations": true,
+        "step_based_answer_format": true
+      },
+      "validation_rules": {
+        "must_have_single_correct_answer": true,
+        "numerical_answers_must_be_calculated": true,
+        "distractors_should_reflect_common_errors": true,
+        "no_ambiguous_wording": true,
+        "verify_solution_before_distractors": true
+      },
+      "common_mistakes_patterns": [
+        "sign_error",
+        "incorrect_order_of_operations",
+        "unit_conversion_error",
+        "misapplied_formula",
+        "algebraic_manipulation_error",
+        "graph_plotting_error"
+      ],
+      "semantic_search_weighting": {
+        "formula_relevance_weight": 0.4, 
+        "example_problem_weight": 0.5,
+        "definition_weight": 0.1
+      },
+      "llm_prompt_template": {
+        "system_instructions": "Generate mathematically precise questions. First compute the solution exactly. Verify each step. Provide one unambiguous correct answer. Distractors must reflect realistic student mistakes including calculation, formula, or conceptual errors. Include intermediate steps for multi-step problems. For graph-based questions, provide LaTeX or JSON representation of the graph.",
+        "format_rules": "Use LaTeX for all equations. Compute exact values before generating options. Include step-wise solutions for multi-step problems. Distractors must be plausible mistakes."
+      },
+      "scoring_rules": {
+        "partial_credit_allowed": true,
+        "step_based_scoring": true,
+        "auto_grade_supported": true,
+        "step_weights": "proportional_to_steps"
+      }
+    },
+    {
+      "subject_id": "physics",
+      "display_name": "Physics",
+      "version": "2.0",
+      "description": "Conceptual and mathematical study of motion, forces, energy, waves, electricity, and modern physics.",
+      "question_generation": {
+        "preferred_question_types": [
+          "conceptual_mcq",
+          "numerical_calculation",
+          "diagram_based",
+          "real_world_application",
+          "multi_step_problem",
+          "graph_based"
+        ],
+        "difficulty_levels": ["easy", "medium", "hard"],
+        "cognitive_levels": [
+          "conceptual_understanding",
+          "application",
+          "analysis",
+          "multi_step_reasoning",
+          "conceptual_integration"
+        ],
+        "steps_required_for_hard": true,
+        "allow_real_world_context": true,
+        "requires_unit_handling": true,
+        "hard_question_spec": {
+          "num_concepts": 2,
+          "num_steps": 3,
+          "requires_unit_conversion": true
+        }
+      },
+      "answer_format_rules": {
+        "allow_decimal": true,
+        "allow_fraction": false,
+        "precision_rules": {
+          "decimal_places": 2,
+          "tolerance": 0.05
+        },
+        "unit_required": true,
+        "latex_required_for_equations": true,
+        "step_based_answer_format": true
+      },
+      "validation_rules": {
+        "must_have_single_correct_answer": true,
+        "must_include_units_when_numerical": true,
+        "distractors_should_reflect_conceptual_misconceptions": true,
+        "no_physics_impossibilities": true,
+        "verify_solution_before_distractors": true
+      },
+      "common_mistakes_patterns": [
+        "confusing_mass_and_weight",
+        "ignoring_friction",
+        "sign_direction_error",
+        "wrong_formula_selection",
+        "unit_mismatch",
+        "misunderstanding_newtons_third_law",
+        "graphical_misinterpretation"
+      ],
+      "semantic_search_weighting": {
+        "formula_relevance_weight": 0.3,
+        "concept_definition_weight": 0.3,
+        "example_problem_weight": 0.4
+      },
+      "llm_prompt_template": {
+        "system_instructions": "Generate physically accurate and realistic physics questions. First solve numerically or symbolically. Verify each step. Provide one unambiguous correct answer. Distractors must reflect common misconceptions. Include intermediate steps for multi-step problems. For diagram/graph questions, provide LaTeX or JSON representation.",
+        "format_rules": "Use LaTeX for all formulas. Include units in final answers. Compute exact values before generating options. Step-based solutions required for multi-step problems."
+      },
+      "scoring_rules": {
+        "partial_credit_allowed": true,
+        "step_based_scoring": true,
+        "auto_grade_supported": true,
+        "step_weights": "proportional_to_steps"
+      }
+    }
+  ]
+}

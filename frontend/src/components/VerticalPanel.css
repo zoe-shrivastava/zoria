@@ -1,0 +1,117 @@
+.vertical-panel {
+  background: var(--bg-card);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: var(--transition);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.vertical-panel:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: var(--shadow-md);
+}
+
+.vertical-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vertical-panel-title-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.vertical-panel-icon {
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+  border-radius: var(--radius-sm);
+  color: var(--primary-light);
+}
+
+.vertical-panel-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.vertical-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.vertical-panel-content {
+  padding: 1.25rem;
+  flex: 1;
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+
+.vertical-panel-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.vertical-panel-content::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+.vertical-panel-content::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.vertical-panel-content::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+.vertical-panel.compact .vertical-panel-header {
+  padding: 0.875rem 1rem;
+}
+
+.vertical-panel.compact .vertical-panel-content {
+  padding: 1rem;
+}
+
+.vertical-panel.compact .vertical-panel-title {
+  font-size: 1.1rem;
+}
+
+.vertical-panel.compact .vertical-panel-icon {
+  width: 32px;
+  height: 32px;
+  font-size: 1.25rem;
+}
+
+.vertical-panel.full-height {
+  min-height: 100%;
+}
+
+.vertical-panel.no-border {
+  border: none;
+  box-shadow: none;
+}
+
+.vertical-panel.no-border:hover {
+  box-shadow: none;
+}
