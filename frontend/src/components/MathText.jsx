@@ -124,7 +124,7 @@ export default function MathText({ text, inline = false }) {
         wrapper.style.cssText = 'padding: 1rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border: 2px dashed #4a90e2; border-radius: 8px; text-align: center; min-height: 120px; display: flex; align-items: center; justify-content: center; flex-direction: column;'
         
         const title = document.createElement('div')
-        title.textContent = '📊 Diagram'
+        title.textContent = 'Diagram'
         title.style.cssText = 'font-size: 1.2rem; margin-bottom: 0.5rem; color: #2c3e50;'
         
         const codeElement = document.createElement('pre')

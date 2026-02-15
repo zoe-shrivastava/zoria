@@ -78,7 +78,6 @@ export default function DocumentUpload({ childId, childList = [], onUploadComple
           alignItems: 'center',
           gap: '0.5rem'
         }}>
-          <span>⚠</span>
           <span>{error}</span>
         </div>
       )}

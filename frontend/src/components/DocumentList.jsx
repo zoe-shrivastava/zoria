@@ -431,7 +431,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                           }}
                           title="View Markdown"
                         >
-                          📄 Markdown
+                          Markdown
                         </button>
                         <button
                           onClick={() => handleViewConcepts(doc.id)}
@@ -446,7 +446,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                           }}
                           title="View Concepts JSON"
                         >
-                          📋 Concepts
+                          Concepts
                         </button>
                       </>
                     )}
@@ -493,7 +493,7 @@ function DocumentDataModal({ type, content, filename, onClose }) {
               {filename}
             </p>
           </div>
-          <button className="document-data-close" onClick={onClose} title="Close">×</button>
+          <button className="document-data-close" onClick={onClose} title="Close">Close</button>
         </div>
         <div className="document-data-content">
           <pre>{displayContent}</pre>

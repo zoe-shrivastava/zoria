@@ -105,7 +105,7 @@ export default function MatchingQuestionWidget({ question, answer, onChange, dis
         color: 'var(--primary-color)',
         fontWeight: '500',
       }}>
-        🔗 Match each item in Column A with the corresponding item in Column B
+        Match each item in Column A with the corresponding item in Column B
       </div>
       
       <div style={{
@@ -164,7 +164,7 @@ export default function MatchingQuestionWidget({ question, answer, onChange, dis
                       }}
                       title="Remove match"
                     >
-                      ✕
+                      Remove
                     </button>
                   )}
                 </div>

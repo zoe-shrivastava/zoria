@@ -250,7 +250,7 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
               </div>
               {test.status === 'draft' && (
                 <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '0.25rem', fontStyle: 'italic' }}>
-                  ⏳ Generating questions...
+                  Generating questions...
                 </div>
               )}
             </div>
@@ -287,7 +287,6 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
                     }}
                     title="Reevaluate test"
                   >
-                    <span>{reevaluating[test.id] ? '⏳' : '🔄'}</span>
                     <span>{reevaluating[test.id] ? 'Reevaluating...' : 'Reevaluate'}</span>
                   </button>
                   <button
@@ -309,7 +308,6 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
                     }}
                     title="Reopen test"
                   >
-                    <span>{reopening[test.id] ? '⏳' : '🔓'}</span>
                     <span>{reopening[test.id] ? 'Reopening...' : 'Reopen'}</span>
                   </button>
                 </>

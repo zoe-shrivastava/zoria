@@ -8,7 +8,7 @@ import DiagramDrawingCanvas from './DiagramDrawingCanvas'
 import MatchingQuestionWidget from './MatchingQuestionWidget'
 import FillInBlankWidget from './FillInBlankWidget'
 
-export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdmin = false }) {
+export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdmin = false, onViewReport }) {
   const [test, setTest] = useState(null)
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -416,13 +416,13 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
         })
         
         await tests.answer(testId, questionId, answerString, null, behavioralPayload)
-        console.log('✅ Answer saved successfully:', { 
+        console.log('Answer saved successfully:', { 
           questionId, 
           answerLength: answerString.length,
           behavioralData: behavioralPayload
         })
       } catch (error) {
-        console.error('❌ Failed to save answer:', error)
+        console.error('Failed to save answer:', error)
         showNotification('Failed to save answer. Please try again.', 'error')
       }
     }
@@ -1152,7 +1152,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                   color: 'var(--error-color)',
                   marginBottom: '0.75rem'
                 }}>
-                  📝 Detailed Explanation
+                  Detailed Explanation
                 </div>
                 <div style={{ color: 'var(--text-color)', whiteSpace: 'pre-wrap' }}>
                   <MathText text={qFormattedFeedback} />
@@ -1178,7 +1178,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
               color: 'var(--primary-color)',
               marginBottom: '0.75rem'
             }}>
-              📚 Solution Steps
+              Solution Steps
             </div>
             <ol style={{
               margin: 0,
@@ -1334,7 +1334,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                 color: 'var(--primary-color)',
                 marginBottom: '0.5rem'
               }}>
-                💡 Hint
+                Hint
               </div>
               <div style={{ fontSize: '0.95rem', lineHeight: '1.6' }}>
                 <MathText text={hint} />
@@ -1478,9 +1478,9 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                 color: 'var(--primary-color)',
                 fontWeight: '500',
               }}>
-                {isProblemSolving ? '📝 Show all of your steps' : 
-                 isConceptual ? '💭 Explain your reasoning' :
-                 '✍️ Type your answer'}
+                {isProblemSolving ? 'Show all of your steps' : 
+                 isConceptual ? 'Explain your reasoning' :
+                 'Type your answer'}
               </div>
             )}
             
@@ -1587,7 +1587,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                     color: 'var(--primary-color)',
                     fontWeight: '500'
                   }}>
-                    ⚠️ This question requires you to draw a graph
+                    This question requires you to draw a graph
                   </div>
                 )}
                 <div style={{ 
@@ -1629,7 +1629,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                     color: 'var(--primary-color)',
                     fontWeight: '500'
                   }}>
-                    ⚠️ This question requires you to draw a diagram
+                    This question requires you to draw a diagram
                   </div>
                 )}
                 <div style={{ 
@@ -1718,11 +1718,11 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                       }
                     }}
                   >
-                    {score === 1 && '😕 Not at all'}
-                    {score === 2 && '😐 Slightly'}
-                    {score === 3 && '😊 Somewhat'}
-                    {score === 4 && '😄 Very'}
-                    {score === 5 && '😁 Extremely'}
+                    {score === 1 && 'Not at all'}
+                    {score === 2 && 'Slightly'}
+                    {score === 3 && 'Somewhat'}
+                    {score === 4 && 'Very'}
+                    {score === 5 && 'Extremely'}
                   </button>
                 )
               })}
@@ -2012,7 +2012,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                       color: 'var(--error-color)',
                       marginBottom: '0.75rem'
                     }}>
-                      📝 Detailed Explanation
+                      Detailed Explanation
                     </div>
                     <div style={{ color: 'var(--text-color)', whiteSpace: 'pre-wrap' }}>
                       <MathText text={formattedFeedback} />
@@ -2067,7 +2067,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
                   color: 'var(--primary-color)',
                   marginBottom: '0.75rem'
                 }}>
-                  📚 Solution Steps
+                  Solution Steps
                 </div>
                 <ol style={{
                   margin: 0,
@@ -2188,19 +2188,52 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
             </div>
             {test.updated_at && (
               <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                Last evaluated: {new Date(test.updated_at).toLocaleString()}
+                Last evaluated: {(() => {
+                  // Ensure UTC timestamps are properly parsed
+                  let dateStr = test.updated_at
+                  if (!dateStr.includes('Z') && !dateStr.match(/[+-]\d{2}:\d{2}$/)) {
+                    // Add 'Z' to indicate UTC if not present
+                    dateStr = dateStr.endsWith('Z') ? dateStr : dateStr + 'Z'
+                  }
+                  const date = new Date(dateStr)
+                  return date.toLocaleString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                  })
+                })()}
               </div>
             )}
           </div>
-          {isAdmin && (
-            <button
-              onClick={handleDownload}
-              className="btn-secondary"
-              style={{ marginLeft: 'auto' }}
-            >
-              Download Test (TXT)
-            </button>
-          )}
+          <div style={{ display: 'flex', gap: '0.75rem', marginLeft: 'auto' }}>
+            {test.child_id && onViewReport && (
+              <button
+                onClick={() => onViewReport(test.child_id)}
+                className="btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                View Evaluation Report
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={handleDownload}
+                className="btn-secondary"
+              >
+                Download Test (TXT)
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

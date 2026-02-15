@@ -9,6 +9,7 @@ import TestLauncher from '../components/TestLauncher'
 import TestList from '../components/TestList'
 import TestListGrouped from '../components/TestListGrouped'
 import QuizPlayer from '../components/QuizPlayer'
+import EvaluationReport from '../components/EvaluationReport'
 import { children, documents, child, isAuthError } from '../services/api'
 import { showNotification } from '../utils/notifications'
 
@@ -29,6 +30,8 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
   const [testStatusFilter, setTestStatusFilter] = useState(null)
   const [documentListRefreshKey, setDocumentListRefreshKey] = useState(0)
   const [testListRefreshKey, setTestListRefreshKey] = useState(0)
+  const [viewingReport, setViewingReport] = useState(false)
+  const [reportChildId, setReportChildId] = useState(null)
 
   useEffect(() => {
     if (isParent || isAdmin) {
@@ -313,6 +316,11 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       testId={selectedTest.id}
                       readOnly={true}
                       isAdmin={isAdmin}
+                      onViewReport={(childId) => {
+                        setSelectedChild(childId)
+                        setActiveTab('reports')
+                        setSelectedTest(null)
+                      }}
                     />
                   </div>
                 ) : (
@@ -492,6 +500,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
       { id: 'profile', label: 'My Profile' },
       { id: 'documents', label: 'My Documents', badge: documentCount || null },
       { id: 'tests', label: 'Tests', badge: testCount || null },
+      { id: 'reports', label: 'Reports' },
     ]
 
     return (
@@ -573,6 +582,19 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
               </div>
             )}
 
+            {activeTab === 'reports' && (
+              <div className="dashboard-section">
+                <h2>My Evaluation Report</h2>
+                {childProfile ? (
+                  <EvaluationReport childId={childProfile.id} daysBack={30} showAllGuides={true} />
+                ) : (
+                  <div className="empty-state">
+                    <p>Loading profile...</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {activeTab === 'tests' && (
               <div className="dashboard-section">
                 {selectedTest ? (
@@ -591,6 +613,10 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       onComplete={(result) => {
                         setSelectedTest(null)
                         showNotification(`Test completed! Score: ${result.percentage.toFixed(1)}%`, 'success')
+                      }}
+                      onViewReport={() => {
+                        setActiveTab('reports')
+                        setSelectedTest(null)
                       }}
                     />
                   </div>
@@ -854,6 +880,23 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
               ) : childList.length === 0 ? (
                 <div className="empty-state">
                   <p>Create a child profile first to upload documents.</p>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {activeTab === 'reports' && (
+            <div className="dashboard-section">
+              {!selectedChild && childList.length > 0 && (
+                <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                  Please select a child to view their evaluation report.
+                </p>
+              )}
+              {selectedChild ? (
+                <EvaluationReport childId={selectedChild} daysBack={30} showAllGuides={true} />
+              ) : childList.length === 0 ? (
+                <div className="empty-state">
+                  <p>Create a child profile first to view evaluation reports.</p>
                 </div>
               ) : null}
             </div>

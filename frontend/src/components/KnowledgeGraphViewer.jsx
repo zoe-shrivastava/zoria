@@ -92,7 +92,7 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
               {document_name}
             </p>
           </div>
-          <button className="knowledge-graph-close" onClick={onClose} title="Close">×</button>
+          <button className="knowledge-graph-close" onClick={onClose} title="Close">Close</button>
         </div>
 
         <div className="knowledge-graph-tabs">
@@ -100,7 +100,7 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
             className={activeTab === 'graph' ? 'active' : ''}
             onClick={() => setActiveTab('graph')}
           >
-            📊 Graph View
+            Graph View
           </button>
           <button 
             className={activeTab === 'concepts' ? 'active' : ''}
@@ -234,7 +234,7 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
                 </div>
                 <div className="legend-separator"></div>
                 <div className="legend-item">
-                  <div className="legend-info">💡 Click nodes to view details</div>
+                  <div className="legend-info">Click nodes to view details</div>
                 </div>
                 <div className="legend-item">
                   <div className="legend-info">🖱️ Drag to explore</div>

@@ -1165,3 +1165,262 @@ async def delete_test(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete test: {str(e)}"
         )
+
+
+@router.get("/child/{child_id}/evaluation-report")
+async def get_evaluation_report(
+    child_id: str,
+    days_back: int = Query(30, ge=7, le=365),
+    generate_guides: bool = Query(True),
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
+    """Get detailed evaluation report for a child.
+    
+    GET /api/v1/tests/child/{child_id}/evaluation-report?days_back=30&generate_guides=true
+    """
+    try:
+        from services.evaluation_report_service import EvaluationReportService
+        
+        # Check access
+        user_role = current_user.get("role")
+        user_child_id = current_user.get("child_id")
+        
+        if user_role == "child" and str(user_child_id) != child_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You can only view your own reports"
+            )
+        
+        report_service = EvaluationReportService(db)
+        report = await report_service.generate_report(
+            child_id=child_id,
+            days_back=days_back,
+            generate_study_guides=generate_guides
+        )
+        
+        return report
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating evaluation report: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate report: {str(e)}"
+        )
+
+
+@router.get("/study-guides/{guide_id}")
+async def get_study_guide(
+    guide_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
+    """Get a specific study guide.
+    
+    GET /api/v1/tests/study-guides/{guide_id}
+    """
+    try:
+        from services.study_guide_service import StudyGuideService
+        
+        study_guide_service = StudyGuideService(db)
+        guide = await study_guide_service.get_study_guide(guide_id)
+        
+        if not guide:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Study guide not found"
+            )
+        
+        # Check access
+        user_role = current_user.get("role")
+        user_child_id = current_user.get("child_id")
+        
+        if user_role == "child" and str(user_child_id) != str(guide['child_id']):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You can only view your own study guides"
+            )
+        
+        return guide
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting study guide: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get study guide: {str(e)}"
+        )
+
+
+@router.post("/study-guides/{guide_id}/regenerate")
+async def regenerate_study_guide(
+    guide_id: str,
+    days_back: int = Query(30, ge=7, le=365),
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
+    """Regenerate a study guide with latest evaluation data.
+    
+    POST /api/v1/tests/study-guides/{guide_id}/regenerate?days_back=30
+    """
+    try:
+        from services.study_guide_service import StudyGuideService
+        from services.evaluation_report_service import EvaluationReportService
+        
+        study_guide_service = StudyGuideService(db)
+        
+        # Get existing guide to extract parameters
+        existing_guide = await study_guide_service.get_study_guide(guide_id)
+        
+        if not existing_guide:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Study guide not found"
+            )
+        
+        # Check access
+        user_role = current_user.get("role")
+        user_child_id = current_user.get("child_id")
+        
+        if user_role == "child" and str(user_child_id) != str(existing_guide['child_id']):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You can only regenerate your own study guides"
+            )
+        
+        # Get latest evaluation report data to regenerate with current errors/feedback
+        evaluation_service = EvaluationReportService(db)
+        report = await evaluation_service.generate_report(
+            child_id=str(existing_guide['child_id']),
+            days_back=days_back,
+            min_tests=1,
+            generate_study_guides=False  # We'll generate manually
+        )
+        
+        # Find the matching focus area in the report
+        concept_name = existing_guide['concept_name']
+        matching_area = None
+        for area in report.get('areas_of_focus', []):
+            if area['concept'] == concept_name:
+                matching_area = area
+                break
+        
+        if not matching_area:
+            # If no matching area found, still regenerate with existing parameters
+            logger.warning(f"No matching focus area found for {concept_name}, regenerating with existing parameters")
+            child = await db.fetchrow(
+                "SELECT grade FROM children WHERE id = $1",
+                existing_guide['child_id']
+            )
+            grade_level = child['grade'] if child else None
+            
+            regenerated_guide = await study_guide_service.generate_study_guide(
+                child_id=str(existing_guide['child_id']),
+                concept_name=concept_name,
+                focus_area=existing_guide.get('focus_area', 'General'),
+                grade_level=grade_level,
+                subject=existing_guide.get('subject'),
+                force_regenerate=True
+            )
+        else:
+            # Regenerate with latest data from evaluation report
+            child = await db.fetchrow(
+                "SELECT grade FROM children WHERE id = $1",
+                existing_guide['child_id']
+            )
+            grade_level = child['grade'] if child else None
+            
+            # Extract common errors with explanations
+            common_errors_list = []
+            if matching_area.get('common_errors'):
+                for e in matching_area['common_errors']:
+                    if isinstance(e, dict):
+                        error_type = e.get('type', str(e))
+                        explanations = e.get('explanations', [])
+                        if explanations:
+                            error_desc = f"{error_type}: {explanations[0]}"
+                            if len(explanations) > 1:
+                                error_desc += f" (Also seen: {', '.join(explanations[1:2])})"
+                            common_errors_list.append(error_desc)
+                        else:
+                            error_desc = f"{error_type}: This error occurred {e.get('count', 1)} time(s). Review the concept and practice similar problems."
+                            common_errors_list.append(error_desc)
+                    else:
+                        common_errors_list.append(str(e))
+            
+            # Get subject from first test if available
+            subject = existing_guide.get('subject')
+            if not subject and report.get('subject_performance'):
+                subject = report['subject_performance'][0].get('subject') if report['subject_performance'] else None
+            
+            regenerated_guide = await study_guide_service.generate_study_guide(
+                child_id=str(existing_guide['child_id']),
+                concept_name=concept_name,
+                focus_area=f"Performance: {matching_area['score_percentage']}%",
+                grade_level=grade_level,
+                subject=subject,
+                common_errors=common_errors_list if common_errors_list else None,
+                misconceptions=matching_area.get('misconceptions', []),
+                sample_questions=matching_area.get('sample_questions', []),
+                force_regenerate=True  # This will delete old and create new, or update if replace_existing is used
+            )
+        
+        return {
+            'message': 'Study guide regenerated successfully',
+            'guide': regenerated_guide,
+            'guide_id': regenerated_guide.get('id')  # Return the guide ID (may be same if updated, or new if created)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating study guide: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to regenerate study guide: {str(e)}"
+        )
+
+
+@router.get("/child/{child_id}/study-guides")
+async def list_study_guides(
+    child_id: str,
+    concept_name: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
+    """List study guides for a child.
+    
+    GET /api/v1/tests/child/{child_id}/study-guides?concept_name=optional
+    """
+    try:
+        from services.study_guide_service import StudyGuideService
+        
+        # Check access
+        user_role = current_user.get("role")
+        user_child_id = current_user.get("child_id")
+        
+        if user_role == "child" and str(user_child_id) != child_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You can only view your own study guides"
+            )
+        
+        study_guide_service = StudyGuideService(db)
+        guides = await study_guide_service.get_study_guides_for_child(
+            child_id=child_id,
+            concept_name=concept_name
+        )
+        
+        return {'guides': guides}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing study guides: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list study guides: {str(e)}"
+        )

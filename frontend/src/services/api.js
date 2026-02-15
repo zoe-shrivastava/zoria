@@ -421,6 +421,33 @@ export const tests = {
     apiRequest(`/api/v1/admin/tests/${testId}/reopen`, {
       method: 'POST',
     }),
+
+  // Evaluation reports and study guides
+  getEvaluationReport: (childId, daysBack = 30, generateGuides = true) => {
+    const params = new URLSearchParams()
+    params.append('days_back', daysBack)
+    params.append('generate_guides', generateGuides)
+    return apiRequest(`/api/v1/tests/child/${childId}/evaluation-report?${params.toString()}`, {
+      method: 'GET',
+    })
+  },
+
+  getStudyGuide: (guideId) =>
+    apiRequest(`/api/v1/tests/study-guides/${guideId}`, {
+      method: 'GET',
+    }),
+
+  regenerateStudyGuide: (guideId) =>
+    apiRequest(`/api/v1/tests/study-guides/${guideId}/regenerate`, {
+      method: 'POST',
+    }),
+
+  listStudyGuides: (childId, conceptName = null) => {
+    const params = conceptName ? `?concept_name=${encodeURIComponent(conceptName)}` : ''
+    return apiRequest(`/api/v1/tests/child/${childId}/study-guides${params}`, {
+      method: 'GET',
+    })
+  },
 }
 
 /**

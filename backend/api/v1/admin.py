@@ -500,16 +500,12 @@ async def reevaluate_test(
     try:
         from services.scoring_service import ScoringService
         from services.mastery_service import MasteryService
-        from services.llm_service import LLMService
+        from api.v1.tests import get_evaluation_llm_service
         
         test_repo = TestRepository(db)
         
         # Get LLM service for evaluation (uses Ollama)
-        llm_service = LLMService(
-            model_name="llama3.1",
-            enable_logging=True,
-            context_source="evaluation"
-        )
+        llm_service = get_evaluation_llm_service()
         scoring_service = ScoringService(db, embedding_service=None, llm_service=llm_service)
         mastery_service = MasteryService(db)
         

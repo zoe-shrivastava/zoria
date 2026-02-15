@@ -1,0 +1,936 @@
+"""Service for generating personalized study guides."""
+
+import logging
+import uuid
+import json
+from typing import Dict, Any, Optional, List
+
+from services.llm_service import LLMService
+from database.repositories.concept_repository import ConceptRepository
+from core.database import Database
+
+logger = logging.getLogger(__name__)
+
+
+class StudyGuideService:
+    """Service for generating study guides for focus areas."""
+    
+    def __init__(self, db: Database):
+        """Initialize study guide service.
+        
+        Args:
+            db: Database instance
+        """
+        self.db = db
+        self.concept_repo = ConceptRepository(db)
+        
+        # Initialize LLM service with llama3.1
+        self.llm_service = LLMService(
+            model_name="llama3.1",
+            enable_logging=True,
+            context_source="study_guide_generation"
+        )
+    
+    async def generate_study_guide(
+        self,
+        child_id: str,
+        concept_name: str,
+        focus_area: str,
+        test_id: Optional[str] = None,
+        grade_level: Optional[str] = None,
+        subject: Optional[str] = None,
+        common_errors: Optional[List[str]] = None,
+        misconceptions: Optional[List[str]] = None,
+        sample_questions: Optional[List[Dict]] = None,
+        force_regenerate: bool = False
+    ) -> Dict[str, Any]:
+        """Generate a personalized study guide for a focus area.
+        
+        Args:
+            child_id: Child UUID
+            concept_name: Name of the concept
+            focus_area: Specific area of focus (e.g., "Arithmetic errors")
+            test_id: Optional test ID that triggered this guide
+            grade_level: Grade level of the student
+            subject: Subject name
+            common_errors: List of common errors made
+            misconceptions: List of misconceptions
+            sample_questions: Sample questions that were answered incorrectly
+            
+        Returns:
+            Dictionary with study guide data
+        """
+        logger.info(f"generate_study_guide called: child_id={child_id}, concept={concept_name}, focus_area={focus_area}, force_regenerate={force_regenerate}")
+        
+        # Check if study guide already exists (unless forcing regeneration)
+        if not force_regenerate:
+            try:
+                existing = await self.db.fetchrow(
+                    """
+                    SELECT id, content, key_points, practice_recommendations
+                    FROM study_guides
+                    WHERE child_id = $1 
+                        AND concept_name = $2 
+                        AND focus_area = $3
+                    ORDER BY generated_at DESC
+                    LIMIT 1
+                    """,
+                    child_id, concept_name, focus_area
+                )
+                
+                if existing:
+                    logger.info(f"Using existing study guide for {concept_name} - {focus_area}, id={existing['id']}")
+                    return {
+                        'id': str(existing['id']),
+                        'concept_name': concept_name,
+                        'focus_area': focus_area,
+                        'content': existing['content'],
+                        'key_points': existing['key_points'] or [],
+                        'practice_recommendations': existing['practice_recommendations'] or [],
+                        'is_new': False
+                    }
+            except Exception as e:
+                logger.warning(f"Error checking for existing study guide: {e}, will create new one")
+        else:
+            logger.info(f"Force regeneration requested, will update existing guide or create new one")
+            # Check if guide exists - we'll update it instead of deleting
+            # This preserves the same guide_id
+        
+        # Get concept information if available
+        concept_info = None
+        concepts = await self.concept_repo.get_all_concepts()
+        for concept in concepts:
+            if concept['name'].lower() == concept_name.lower():
+                concept_info = concept
+                break
+        
+        # Build prompt for study guide generation
+        prompt = self._build_study_guide_prompt(
+            concept_name=concept_name,
+            focus_area=focus_area,
+            grade_level=grade_level,
+            subject=subject,
+            concept_info=concept_info,
+            common_errors=common_errors or [],
+            misconceptions=misconceptions or [],
+            sample_questions=sample_questions or []
+        )
+        
+        system_prompt = """You are an expert educational tutor specializing in creating comprehensive, detailed study guides. 
+Your task is to create a thorough, personalized study guide that provides ALL the information a student needs to master a specific concept.
+
+The study guide MUST be comprehensive and include:
+
+1. **Concept Overview**: Clear, detailed explanation of what the concept is, why it's important, and how it fits into the broader subject.
+
+2. **Fundamental Principles**: Core principles, rules, formulas, or definitions that the student must understand.
+
+3. **Step-by-Step Problem Solving**: Detailed, worked examples showing:
+   - How to approach problems of this type
+   - Each step clearly explained
+   - Why each step is taken
+   - Common pitfalls to avoid at each step
+
+4. **Detailed Examples**: Multiple examples with full solutions:
+   - Start with simple examples
+   - Progress to more complex ones
+   - Show variations and edge cases
+   - Include real-world applications if relevant
+
+5. **Common Mistakes & How to Avoid Them**: 
+   - List specific mistakes the student is making
+   - Explain WHY these mistakes happen
+   - Show the CORRECT approach
+   - Provide strategies to avoid repeating these mistakes
+
+6. **Practice Strategies**: 
+   - Specific types of problems to practice
+   - How to structure practice sessions
+   - How to check if understanding is improving
+   - Resources or methods for additional practice
+
+7. **Visual Aids & Memory Techniques**: 
+   - Diagrams, charts, or visual representations if helpful
+   - Mnemonics or memory tricks
+   - Ways to organize information
+
+8. **Self-Assessment**: 
+   - How the student can test their understanding
+   - Signs that they've mastered the concept
+   - What to do if they're still struggling
+
+The study guide should be:
+- VERY DETAILED and COMPREHENSIVE (aim for 800-1500 words)
+- Written at an appropriate grade level
+- Include specific examples relevant to the student's errors
+- Be encouraging but also direct about areas needing improvement
+- Use clear headings and structure for easy reading
+- Include mathematical formulas, equations, or technical details as needed
+
+Format your response as a well-structured, comprehensive study guide with clear sections and subsections."""
+        
+        # Generate study guide using LLM
+        try:
+            logger.info(f"Calling LLM to generate study guide for {concept_name}")
+            response = await self.llm_service.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=4000,  # Increased significantly for comprehensive guides
+                temperature=0.7
+            )
+            
+            logger.info(f"LLM response received, type: {type(response)}")
+            
+            # Extract content from response (returns dict with 'text' key)
+            if isinstance(response, dict):
+                content = response.get('text', '') or response.get('content', '') or str(response)
+            else:
+                content = str(response)
+            
+            if not content or len(content.strip()) < 50:
+                raise ValueError(f"LLM returned insufficient content: {len(content) if content else 0} characters")
+            
+            logger.info(f"Extracted content length: {len(content)} characters")
+            
+            # Extract key points and recommendations using LLM
+            logger.info("Extracting structured data from study guide")
+            structured_data = await self._extract_structured_data(content, concept_name, focus_area)
+            logger.info(f"Extracted structured data: {len(structured_data.get('key_points', []))} key points, {len(structured_data.get('practice_recommendations', []))} recommendations")
+            
+            # Generate revision cards using LLM
+            logger.info(f"Generating revision cards for {concept_name}")
+            revision_cards = await self._generate_revision_cards(content, concept_name)
+            logger.info(f"Generated {len(revision_cards)} revision cards")
+            
+            # Save study guide to database
+            logger.info("Saving study guide to database")
+            # Filter out None, empty, or invalid common errors before saving
+            valid_common_errors = []
+            if common_errors:
+                valid_common_errors = [e for e in common_errors if e and isinstance(e, str) and e.strip() and e.lower() not in ['none', 'null', '']]
+            logger.info(f"Saving {len(valid_common_errors)} valid common errors (filtered from {len(common_errors) if common_errors else 0} total)")
+            
+            # When force_regenerate is True, check for existing guide to update
+            replace_existing = False
+            if force_regenerate:
+                existing = await self.db.fetchrow(
+                    """
+                    SELECT id FROM study_guides
+                    WHERE child_id = $1 
+                        AND concept_name = $2 
+                        AND focus_area = $3
+                    ORDER BY generated_at DESC
+                    LIMIT 1
+                    """,
+                    child_id, concept_name, focus_area
+                )
+                if existing:
+                    replace_existing = True
+                    logger.info(f"Found existing guide {existing['id']}, will update it instead of creating new one")
+                else:
+                    # No existing guide with same focus_area, delete old guides for this concept
+                    try:
+                        deleted = await self.db.execute(
+                            """
+                            DELETE FROM study_guides
+                            WHERE child_id = $1 
+                                AND concept_name = $2
+                            """,
+                            child_id, concept_name
+                        )
+                        logger.info(f"Deleted {deleted} old study guide(s) for {concept_name}")
+                    except Exception as e:
+                        logger.warning(f"Error deleting old study guides: {e}")
+            
+            guide_id = await self._save_study_guide(
+                child_id=child_id,
+                concept_name=concept_name,
+                focus_area=focus_area,
+                content=content,
+                grade_level=grade_level,
+                subject=subject,
+                key_points=structured_data.get('key_points', []),
+                practice_recommendations=structured_data.get('practice_recommendations', []),
+                common_errors=valid_common_errors,
+                related_concepts=structured_data.get('related_concepts', []),
+                test_id=test_id,
+                replace_existing=replace_existing,
+                revision_cards=revision_cards
+            )
+            
+            logger.info(f"Study guide saved successfully with ID: {guide_id}")
+            
+            return {
+                'id': guide_id,
+                'concept_name': concept_name,
+                'focus_area': focus_area,
+                'content': content,
+                'key_points': structured_data.get('key_points', []),
+                'practice_recommendations': structured_data.get('practice_recommendations', []),
+                'common_errors': valid_common_errors,
+                'related_concepts': structured_data.get('related_concepts', []),
+                'is_new': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating study guide for {concept_name}: {e}", exc_info=True)
+            raise
+    
+    def _build_study_guide_prompt(
+        self,
+        concept_name: str,
+        focus_area: str,
+        grade_level: Optional[str],
+        subject: Optional[str],
+        concept_info: Optional[Dict],
+        common_errors: List[str],
+        misconceptions: List[str],
+        sample_questions: List[Dict]
+    ) -> str:
+        """Build prompt for study guide generation."""
+        prompt_parts = [
+            f"Create a comprehensive study guide for: {concept_name}",
+            f"",
+            f"Focus Area: {focus_area}",
+            ""
+        ]
+        
+        if grade_level:
+            prompt_parts.append(f"Grade Level: {grade_level}")
+        if subject:
+            prompt_parts.append(f"Subject: {subject}")
+        
+        if concept_info:
+            source_markdown = concept_info.get('source_markdown', '')
+            if source_markdown:
+                prompt_parts.extend([
+                    "",
+                    "Concept Information:",
+                    f"Name: {concept_info.get('name', '')}",
+                    f"Description: {source_markdown[:500]}",
+                ])
+        
+        if common_errors:
+            # Filter out None, empty, or invalid error entries
+            valid_errors = [e for e in common_errors if e and isinstance(e, str) and e.strip() and e.lower() not in ['none', 'null', '']]
+            if valid_errors:
+                prompt_parts.extend([
+                    "",
+                    "=" * 60,
+                    "COMMON ERRORS MADE (with detailed explanations from student's incorrect/partially correct answers):",
+                    "=" * 60,
+                    "",
+                    "CRITICAL: Each error below includes detailed feedback from actual student answers.",
+                    "You MUST use these detailed explanations to create specific, actionable guidance.",
+                    "Do NOT use generic error descriptions - use the actual detailed feedback provided.",
+                    ""
+                ])
+                for i, error in enumerate(valid_errors, 1):
+                    prompt_parts.append(f"{i}. {error}")
+                prompt_parts.extend([
+                    "",
+                    "IMPORTANT INSTRUCTIONS FOR SECTION 5 (Common Errors & How to Fix Them):",
+                    "",
+                    "For EACH error listed above:",
+                    "1. **Use the detailed explanation provided** - The explanation after the colon (:) contains",
+                    "   specific feedback from the student's actual incorrect or partially correct answers.",
+                    "   This is the MOST IMPORTANT information - use it to understand exactly what went wrong.",
+                    "",
+                    "2. **Expand on the detailed explanation**:",
+                    "   - Explain what the mistake looks like in practice (use the detailed feedback as context)",
+                    "   - Explain WHY students make this specific mistake (based on the detailed feedback)",
+                    "   - Show the CORRECT approach or solution (contrast with what the student did wrong)",
+                    "   - Provide specific examples showing the wrong way (from the detailed feedback) vs. the right way",
+                    "   - Give concrete strategies to avoid repeating this exact error",
+                    "",
+                    "3. **If the error type is 'No_Answer'**:",
+                    "   - Explain the importance of attempting all questions",
+                    "   - Show how partial credit can be earned by showing work",
+                    "   - Provide strategies for approaching questions when unsure",
+                    "",
+                    "4. **If detailed explanation is missing or generic**:",
+                    "   - Still provide helpful guidance based on the error type",
+                    "   - But emphasize that the student should review their specific answers",
+                    "",
+                    "REMEMBER: The detailed explanations are from REAL student answers. Use them to create",
+                    "personalized, specific guidance that directly addresses what the student actually did wrong."
+                ])
+        
+        if misconceptions:
+            prompt_parts.extend([
+                "",
+                "Misconceptions Identified:",
+            ])
+            for i, misc in enumerate(misconceptions, 1):
+                prompt_parts.append(f"{i}. {misc}")
+        
+        if sample_questions:
+            prompt_parts.extend([
+                "",
+                "Sample Questions (where errors occurred):",
+            ])
+            for i, q in enumerate(sample_questions[:3], 1):
+                q_text = q.get('text', '')[:200] if isinstance(q.get('text'), str) else str(q.get('text', ''))[:200]
+                prompt_parts.append(f"{i}. {q_text}")
+        
+        prompt_parts.extend([
+            "",
+            "=" * 60,
+            "CRITICAL REQUIREMENTS FOR THIS STUDY GUIDE:",
+            "=" * 60,
+            "",
+            "This study guide MUST be COMPREHENSIVE and DETAILED. It should provide ALL the information",
+            "a student needs to learn and master this concept independently, without needing additional resources.",
+            "",
+            "MARKDOWN FORMATTING REQUIREMENTS:",
+            "",
+            "CRITICAL: You MUST use proper markdown heading hierarchy for all sections:",
+            "- Use # (h1) for the main title (e.g., '# Comprehensive Study Guide for [Concept Name]')",
+            "- Use ## (h2) for major section headings (e.g., '## Section 1: Introduction & Concept Overview')",
+            "- Use ### (h3) for subsections within major sections",
+            "- Use #### (h4) for sub-subsections if needed",
+            "",
+            "For mathematical expressions:",
+            "- Use inline LaTeX with single dollar signs: $formula$ (e.g., $F = ma$, $v = u + at$)",
+            "- Use display math with double dollar signs for centered equations: $$formula$$",
+            "- Always use proper LaTeX syntax (e.g., $\\text{units}$ for text in math mode)",
+            "",
+            "For lists and formatting:",
+            "- Use bullet points (-) for unordered lists",
+            "- Use numbered lists (1., 2., 3.) for sequential steps",
+            "- Use **bold** for emphasis on important terms",
+            "- Use *italic* for definitions or special terms",
+            "- Use code blocks (```) for formulas or code examples if needed",
+            "",
+            "REQUIRED SECTIONS (each must be thoroughly developed with proper markdown headings):",
+            "",
+            "## Section 1: Introduction & Concept Overview (150-200 words)",
+            "- What is this concept? Define it clearly.",
+            "- Why is it important? How is it used?",
+            "- Where does it fit in the broader subject?",
+            "- Real-world applications or examples.",
+            "",
+            "## Section 2: Fundamental Principles & Theory (200-300 words)",
+            "- Core principles, rules, or laws that govern this concept",
+            "- Key definitions and terminology",
+            "- Important formulas, equations, or relationships (use LaTeX: $F = ma$)",
+            "- Theoretical foundation - WHY things work this way",
+            "",
+            "## Section 3: Step-by-Step Problem-Solving Method (200-300 words)",
+            "- A clear, repeatable method for solving problems",
+            "- Step-by-step procedure with explanations",
+            "- Decision points: how to know which approach to use",
+            "- How to check your work",
+            "",
+            "## Section 4: Detailed Worked Examples (300-400 words)",
+            "- AT LEAST 3-5 complete, fully worked examples",
+            "- Start with simple, basic examples",
+            "- Progress to more complex, multi-step problems",
+            "- For EACH example, use ### for the example heading (e.g., '### Example 1: [Problem Description]')",
+            "- For EACH example, show:",
+            "  * The problem statement",
+            "  * Your thinking process (what to look for)",
+            "  * Step 1: [what to do and why]",
+            "  * Step 2: [what to do and why]",
+            "  * Step 3: [continue for all steps]",
+            "  * Final answer with units/formatting (use LaTeX for formulas)",
+            "  * Verification or check",
+            "",
+            "## Section 5: Common Errors & How to Fix Them (200-300 words)",
+            "- Address EACH common error listed above",
+            "- For each error, use ### for the error heading (e.g., '### Error 1: [Error Name]')",
+            "- CRITICAL: Use the detailed explanation provided for each error (the text after the colon)",
+            "  This detailed explanation comes from actual student answers and tells you exactly what went wrong.",
+            "- For each error, provide:",
+            "  * What the mistake looks like (based on the detailed explanation provided)",
+            "  * Why students make this specific mistake (use the detailed explanation to understand the root cause)",
+            "  * The CORRECT approach (contrast with what the student did wrong, as described in the detailed explanation)",
+            "  * How to recognize and avoid this error (specific strategies based on the detailed feedback)",
+            "- Include examples showing the wrong way (from the detailed explanation) vs. the right way",
+            "- Use tables or formatted lists to show comparisons when helpful",
+            "- Make the guidance SPECIFIC and ACTIONABLE - reference the detailed explanations provided",
+            "",
+            "## Section 6: Misconceptions Clarified (150-200 words)",
+            "- Address EACH misconception listed above",
+            "- For each misconception, use ### for the misconception heading (e.g., '### Misconception 1: [Description]')",
+            "- Explain why the misconception is wrong",
+            "- Provide the correct understanding",
+            "- Use examples to illustrate the correct concept",
+            "",
+            "## Section 7: Practice Problems with Guidance (200-250 words)",
+            "- Provide 3-5 practice problems of increasing difficulty",
+            "- For each problem, use ### for the problem heading (e.g., '### Problem 1: [Description]')",
+            "- For each problem:",
+            "  * The problem statement",
+            "  * Hints or guidance (what to think about first)",
+            "  * Key steps to follow",
+            "  * How to verify the answer",
+            "",
+            "## Section 8: Study & Practice Strategies (150-200 words)",
+            "- How to study this concept effectively",
+            "- Recommended practice schedule",
+            "- How to track progress",
+            "- When to seek additional help",
+            "",
+            "## Section 9: Quick Reference & Summary (100-150 words)",
+            "- Key formulas or rules in one place (use LaTeX: $F = ma$, $v = u + at$)",
+            "- Step-by-step procedure summary",
+            "- Common pitfalls reminder",
+            "",
+            "TONE & STYLE:",
+            "- Be encouraging and supportive",
+            "- Use clear, age-appropriate language",
+            "- Break complex ideas into smaller parts",
+            "- Use analogies when helpful",
+            "- Be thorough - assume the student knows very little about this concept",
+            "",
+            "LENGTH: Aim for 1500-2500 words of substantive, educational content.",
+            "This is a COMPREHENSIVE guide - it should be detailed enough that a student can learn",
+            "the concept from scratch using only this guide.",
+            "",
+            "OUTPUT FORMAT:",
+            "Output ONLY the markdown content. Do NOT include any meta-commentary, explanations, or",
+            "notes about the format. Just output the study guide content in proper markdown format",
+            "with the heading hierarchy and LaTeX formatting as specified above.",
+            "",
+            "=" * 60
+        ])
+        
+        return "\n".join(prompt_parts)
+    
+    async def _generate_revision_cards(
+        self,
+        content: str,
+        concept_name: str
+    ) -> List[Dict[str, Any]]:
+        """Generate revision cards from study guide content using LLM.
+        
+        Args:
+            content: The study guide markdown content
+            concept_name: Name of the concept
+            
+        Returns:
+            List of revision card objects with 'front' and 'back' keys
+        """
+        prompt = f"""
+Extract revision cards from this study guide for {concept_name}:
+
+{content}
+
+### TASK: Structural Content Extraction
+Review the provided text and generate:
+1. **5-8 Definitions**: Focus on fundamental terms found in Sections 1 and 2.
+2. **5-8 Formulas**: Extract core equations. Use LaTeX.
+3. **3-5 Procedural Examples**: Extract full problems and all steps from Sections 4 or 7.
+
+### OUTPUT RULES:
+- If a problem in the text has a calculation error or uses an incorrect formula for the given variables, correct it in the card output.
+- Every card must be self-contained (no "as seen in example 1" references).
+- Use double backslashes for all LaTeX: `\\vec{F} = ma`.
+- Return ONLY the raw JSON array `[...]`.
+
+### OUTPUT JSON EXAMPLE:
+[
+  {{
+    "front": "What is the formula for Kinetic Energy?",
+    "back": "The formula is: $$KE = \\frac{{1}}{{2}}mv^2$$\n\nWhere:\n- $m$ is mass\n- $v$ is velocity"
+  }},
+  {{
+    "front": "Sample Problem: [Context]",
+    "back": "Step 1: [Action]\n\nStep 2: [Calculation]\n\nFinal Answer: [Value]"
+  }}
+]
+"""
+
+        system_prompt = """
+# Role: Expert Educational Content Extractor (Llama 3.1)
+You are a specialist in transforming long-form Study Guides into high-utility active recall Revision Cards.
+
+## 1. EXTRACTION & AUDIT PROTOCOL
+- **Definitions**: Identify core terms. Format: Front: "What is [Term]?"; Back: Scientific definition.
+- **Formulas**: Extract LaTeX formulas. You MUST provide a "Variable Legend" defining every symbol used.
+- **Step-by-Step Solutions**: 
+    - Include every numbered step from the text. 
+    - **Logic Guardrail**: If the source text suggests a formula that does not match the variables given (e.g., using F=ma when only velocity/time are provided), you must correct the logic to use the mathematically sound formula.
+- **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` is properly closed. Verify syntax like `\\text{m s}^{-1}`.
+
+## 2. FORMATTING & JSON SAFETY (CRITICAL)
+- **JSON Structure**: Output a RAW JSON ARRAY only. 
+  - **Start with `[` and end with `]`.** - Do NOT wrap the array in a "cards" key. 
+  - Do NOT include markdown code blocks (```json).
+- **Double-Backslash Rule**: Every LaTeX command must use double-backslashes (e.g., `\\frac`, `\\vec`).
+- **Escaped Newlines**: Use `\n\n` to separate steps in the "back" field.
+
+## 3. CONTENT DENSITY
+- **Front**: Concise question or prompt (< 100 chars).
+- **Back**: Comprehensive but clear (< 1000 chars).
+"""
+
+        try:
+            response = await self.llm_service.generate_json(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=2000
+            )
+            
+            # Parse response
+            cards = []
+            if isinstance(response, dict):
+                if 'cards' in response:
+                    cards = response['cards']
+                elif 'revision_cards' in response:
+                    cards = response['revision_cards']
+                else:
+                    # Try to extract cards from any array field
+                    for key, value in response.items():
+                        if isinstance(value, list):
+                            cards = value
+                            break
+            elif isinstance(response, list):
+                cards = response
+            elif isinstance(response, str):
+                import json
+                try:
+                    parsed = json.loads(response)
+                    if isinstance(parsed, list):
+                        cards = parsed
+                    elif isinstance(parsed, dict) and 'cards' in parsed:
+                        cards = parsed['cards']
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse revision cards JSON: {response[:200]}")
+                    cards = []
+            
+            # Validate and clean cards
+            valid_cards = []
+            for card in cards:
+                if isinstance(card, dict) and 'front' in card and 'back' in card:
+                    # Ensure front and back are strings
+                    front = str(card.get('front', '')).strip()
+                    back = str(card.get('back', '')).strip()
+                    if front and back and len(front) < 200 and len(back) < 2000:
+                        valid_cards.append({
+                            'front': front,
+                            'back': back
+                        })
+            
+            logger.info(f"Generated {len(valid_cards)} valid revision cards for {concept_name}")
+            return valid_cards
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate revision cards using LLM: {e}", exc_info=True)
+            return []
+    
+    async def _extract_structured_data(
+        self,
+        content: str,
+        concept_name: str,
+        focus_area: str
+    ) -> Dict[str, Any]:
+        """Extract structured data (key points, recommendations) from study guide."""
+        prompt = f"""Extract structured information from this study guide:
+
+{content}
+
+Please provide:
+1. Key Points (3-5 main points as a JSON array)
+2. Practice Recommendations (3-5 recommendations as a JSON array)
+3. Related Concepts (concepts that should be reviewed, as a JSON array)
+
+Format as JSON:
+{{
+  "key_points": ["point1", "point2", ...],
+  "practice_recommendations": ["rec1", "rec2", ...],
+  "related_concepts": ["concept1", "concept2", ...]
+}}"""
+        
+        try:
+            response = await self.llm_service.generate_json(
+                prompt=prompt,
+                system_prompt="You are a helpful assistant that extracts structured data from text.",
+                max_tokens=500
+            )
+            
+            result = {}
+            if isinstance(response, dict):
+                result = response
+            elif isinstance(response, str):
+                result = json.loads(response)
+            
+            # Normalize arrays to ensure they contain only strings
+            def normalize_array(arr):
+                if not isinstance(arr, list):
+                    return []
+                normalized = []
+                for item in arr:
+                    if isinstance(item, str):
+                        normalized.append(item)
+                    elif isinstance(item, dict):
+                        # Extract text from dict (could be 'title', 'text', 'description', etc.)
+                        text = item.get('title') or item.get('text') or item.get('description') or item.get('point') or str(item)
+                        normalized.append(str(text))
+                    else:
+                        normalized.append(str(item))
+                return normalized
+            
+            return {
+                'key_points': normalize_array(result.get('key_points', [])),
+                'practice_recommendations': normalize_array(result.get('practice_recommendations', [])),
+                'related_concepts': normalize_array(result.get('related_concepts', []))
+            }
+        except Exception as e:
+            logger.warning(f"Failed to extract structured data: {e}", exc_info=True)
+        
+        # Fallback: return empty structure
+        return {
+            'key_points': [],
+            'practice_recommendations': [],
+            'related_concepts': []
+        }
+    
+    async def _save_study_guide(
+        self,
+        child_id: str,
+        concept_name: str,
+        focus_area: str,
+        content: str,
+        grade_level: Optional[str],
+        subject: Optional[str],
+        key_points: List[str],
+        practice_recommendations: List[str],
+        common_errors: List[str],
+        related_concepts: List[str],
+        test_id: Optional[str],
+        replace_existing: bool = False,
+        revision_cards: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """Save study guide to database.
+        
+        Args:
+            replace_existing: If True, update existing guide instead of creating new one
+        """
+        # Check if guide already exists and we should replace it
+        existing_id = None
+        if replace_existing:
+            existing = await self.db.fetchrow(
+                """
+                SELECT id FROM study_guides
+                WHERE child_id = $1 
+                    AND concept_name = $2 
+                    AND focus_area = $3
+                ORDER BY generated_at DESC
+                LIMIT 1
+                """,
+                child_id, concept_name, focus_area
+            )
+            if existing:
+                existing_id = str(existing['id'])
+                logger.info(f"Found existing guide {existing_id}, will update instead of creating new one")
+        
+        guide_id = existing_id if existing_id else str(uuid.uuid4())
+        
+        try:
+            logger.info(f"Saving study guide to database: concept={concept_name}, focus_area={focus_area}, replace_existing={replace_existing}")
+            
+            # Normalize all array parameters to ensure they are lists of strings
+            def ensure_string_array(arr, param_name):
+                if not isinstance(arr, list):
+                    logger.warning(f"{param_name} is not a list, converting: {type(arr)}")
+                    return []
+                normalized = []
+                for item in arr:
+                    if isinstance(item, str):
+                        normalized.append(item)
+                    elif isinstance(item, dict):
+                        # Extract text from dict
+                        text = item.get('title') or item.get('text') or item.get('description') or item.get('point') or str(item)
+                        normalized.append(str(text))
+                        logger.warning(f"{param_name} contains dict, extracted: {text[:50]}")
+                    else:
+                        normalized.append(str(item))
+                return normalized
+            
+            normalized_key_points = ensure_string_array(key_points, 'key_points')
+            normalized_practice = ensure_string_array(practice_recommendations, 'practice_recommendations')
+            normalized_errors = ensure_string_array(common_errors, 'common_errors')
+            normalized_concepts = ensure_string_array(related_concepts, 'related_concepts')
+            
+            logger.info(f"Normalized arrays - key_points: {len(normalized_key_points)}, practice: {len(normalized_practice)}, errors: {len(normalized_errors)}, concepts: {len(normalized_concepts)}")
+            
+            # Prepare metadata with revision cards
+            metadata = {}
+            if revision_cards:
+                metadata['revision_cards'] = revision_cards
+                logger.info(f"Including {len(revision_cards)} revision cards in metadata")
+            metadata_json = json.dumps(metadata) if metadata else None
+            
+            if existing_id:
+                # Update existing guide
+                await self.db.execute(
+                    """
+                    UPDATE study_guides 
+                    SET content = $1,
+                        key_points = $2,
+                        practice_recommendations = $3,
+                        common_errors = $4,
+                        related_concepts = $5,
+                        grade_level = $6,
+                        subject = $7,
+                        generated_from_test_id = $8,
+                        metadata = $9,
+                        generated_at = CURRENT_TIMESTAMP
+                    WHERE id = $10
+                    """,
+                    content,
+                    normalized_key_points,
+                    normalized_practice,
+                    normalized_errors,
+                    normalized_concepts,
+                    grade_level,
+                    subject,
+                    test_id,
+                    metadata_json,
+                    guide_id
+                )
+                logger.info(f"Updated existing study guide with ID: {guide_id}")
+            else:
+                # Insert new guide
+                await self.db.execute(
+                    """
+                    INSERT INTO study_guides 
+                    (id, child_id, concept_name, focus_area, grade_level, subject, content,
+                     key_points, practice_recommendations, common_errors, related_concepts,
+                     generated_from_test_id, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    """,
+                    guide_id,
+                    child_id,
+                    concept_name,
+                    focus_area,
+                    grade_level,
+                    subject,
+                    content,
+                    normalized_key_points,
+                    normalized_practice,
+                    normalized_errors,
+                    normalized_concepts,
+                    test_id,
+                    metadata_json  # metadata with revision cards
+                )
+                logger.info(f"Created new study guide with ID: {guide_id}")
+            logger.info(f"Study guide saved successfully with ID: {guide_id}")
+        except Exception as e:
+            logger.error(f"Failed to save study guide to database: {e}", exc_info=True)
+            # Check if table exists
+            try:
+                table_check = await self.db.fetchrow(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'study_guides')"
+                )
+                if not table_check or not table_check['exists']:
+                    logger.error("study_guides table does not exist! Please run migration 017_study_guides_table.sql")
+                    raise Exception("study_guides table does not exist. Please run the database migration.")
+            except Exception as check_error:
+                logger.error(f"Error checking for study_guides table: {check_error}")
+            raise
+        
+        return guide_id
+    
+    async def get_study_guide(
+        self,
+        guide_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get study guide by ID.
+        
+        Args:
+            guide_id: Study guide UUID
+            
+        Returns:
+            Study guide dictionary or None
+        """
+        guide = await self.db.fetchrow(
+            """
+            SELECT * FROM study_guides WHERE id = $1
+            """,
+            guide_id
+        )
+        
+        if guide:
+            guide_dict = dict(guide)
+            # Parse metadata if it's a string
+            if guide_dict.get('metadata'):
+                if isinstance(guide_dict['metadata'], str):
+                    try:
+                        guide_dict['metadata'] = json.loads(guide_dict['metadata'])
+                    except (json.JSONDecodeError, TypeError):
+                        guide_dict['metadata'] = {}
+            return guide_dict
+        return None
+    
+    async def get_study_guides_for_child(
+        self,
+        child_id: str,
+        concept_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get all study guides for a child.
+        Returns only the most recent guide for each concept/focus_area combination.
+        
+        Args:
+            child_id: Child UUID
+            concept_name: Optional concept name filter
+            
+        Returns:
+            List of study guide dictionaries (deduplicated)
+        """
+        logger.info(f"Fetching study guides for child_id: {child_id}, concept_name: {concept_name}")
+        
+        # First check if table exists
+        try:
+            table_check = await self.db.fetchrow(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'study_guides')"
+            )
+            if not table_check or not table_check['exists']:
+                logger.error("study_guides table does not exist!")
+                return []
+        except Exception as e:
+            logger.error(f"Error checking for study_guides table: {e}")
+            return []
+        
+        try:
+            # Get only the most recent guide for each concept/focus_area combination
+            if concept_name:
+                guides = await self.db.fetch(
+                    """
+                    SELECT DISTINCT ON (concept_name, focus_area) *
+                    FROM study_guides
+                    WHERE child_id = $1 AND concept_name = $2
+                    ORDER BY concept_name, focus_area, generated_at DESC
+                    """,
+                    child_id, concept_name
+                )
+            else:
+                guides = await self.db.fetch(
+                    """
+                    SELECT DISTINCT ON (concept_name, focus_area) *
+                    FROM study_guides
+                    WHERE child_id = $1
+                    ORDER BY concept_name, focus_area, generated_at DESC
+                    """,
+                    child_id
+                )
+            
+            logger.info(f"Found {len(guides)} unique study guides for child {child_id} (deduplicated by concept/focus_area)")
+            # Parse metadata for each guide
+            result = []
+            for g in guides:
+                guide_dict = dict(g)
+                # Parse metadata if it's a string
+                if guide_dict.get('metadata'):
+                    if isinstance(guide_dict['metadata'], str):
+                        try:
+                            guide_dict['metadata'] = json.loads(guide_dict['metadata'])
+                        except (json.JSONDecodeError, TypeError):
+                            guide_dict['metadata'] = {}
+                result.append(guide_dict)
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching study guides: {e}", exc_info=True)
+            return []

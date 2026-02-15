@@ -510,7 +510,7 @@ export default function LLMLogsViewer() {
                           borderBottom: '1px solid var(--border)'
                         }}>
                           <strong style={{ fontSize: '1rem', color: log.success ? 'var(--success)' : 'var(--error)' }}>
-                            {log.success ? '✅ RESPONSE' : '❌ ERROR'}
+                            {log.success ? '✓ RESPONSE' : '✗ ERROR'}
                           </strong>
                           {log.response_text && (
                             <button
