@@ -410,6 +410,17 @@ export const tests = {
     apiRequest(`/api/v1/tests/${testId}`, {
       method: 'DELETE',
     }),
+
+  // Admin-only methods
+  reevaluate: (testId) =>
+    apiRequest(`/api/v1/admin/tests/${testId}/reevaluate`, {
+      method: 'POST',
+    }),
+
+  reopen: (testId) =>
+    apiRequest(`/api/v1/admin/tests/${testId}/reopen`, {
+      method: 'POST',
+    }),
 }
 
 /**

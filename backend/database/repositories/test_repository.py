@@ -581,6 +581,78 @@ class TestRepository:
             else:
                 raise
     
+    async def clear_evaluation_data(self, test_id: str) -> None:
+        """Clear evaluation data (scores, is_correct, evaluation metadata) for a test.
+        
+        This is used when reevaluating a test - keeps answers but clears scores.
+        
+        Args:
+            test_id: Test UUID
+        """
+        # Clear scores, is_correct, and evaluation metadata but keep answers
+        try:
+            # Try to clear metadata evaluation fields if metadata column exists
+            await self.db.execute(
+                """
+                UPDATE test_responses
+                SET score = NULL,
+                    is_correct = NULL,
+                    metadata = metadata - 'error_type' - 'misconception' - 'method_detected'
+                WHERE test_id = $1
+                """,
+                test_id
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            # If metadata column doesn't exist, just clear scores
+            if "metadata" in error_str and ("does not exist" in error_str or "column" in error_str):
+                await self.db.execute(
+                    """
+                    UPDATE test_responses
+                    SET score = NULL, is_correct = NULL
+                    WHERE test_id = $1
+                    """,
+                    test_id
+                )
+            else:
+                raise
+    
+    async def clear_all_responses(self, test_id: str) -> None:
+        """Clear all response data (answers, scores, evaluations) for a test.
+        
+        This is used when reopening a test - removes all student answers.
+        
+        Args:
+            test_id: Test UUID
+        """
+        # Delete all responses for this test
+        await self.db.execute(
+            """
+            DELETE FROM test_responses
+            WHERE test_id = $1
+            """,
+            test_id
+        )
+    
+    async def reset_test_for_reopen(self, test_id: str) -> None:
+        """Reset test status and clear completion data for reopening.
+        
+        Args:
+            test_id: Test UUID
+        """
+        await self.db.execute(
+            """
+            UPDATE tests
+            SET status = 'active',
+                started_at = NULL,
+                completed_at = NULL,
+                total_score = NULL,
+                updated_at = $1
+            WHERE id = $2
+            """,
+            datetime.utcnow(), test_id
+        )
+    
     async def calculate_test_score(self, test_id: str) -> Dict[str, Any]:
         """Calculate total score for a test.
         

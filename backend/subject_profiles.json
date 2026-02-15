@@ -147,6 +147,78 @@
         "auto_grade_supported": true,
         "step_weights": "proportional_to_steps"
       }
+    },
+    {
+      "subject_id": "biology",
+      "display_name": "Biology",
+      "version": "2.0",
+      "description": "Study of living organisms, including cellular structures, biochemical processes (photosynthesis/respiration), properties of water, and the building blocks of life.",
+      "question_generation": {
+        "preferred_question_types": [
+          "conceptual_mcq",
+          "labeling_diagram",
+          "matching_functions",
+          "process_ordering",
+          "short_answer_explanation",
+          "data_interpretation"
+        ],
+        "difficulty_levels": ["easy", "medium", "hard"],
+        "cognitive_levels": [
+          "recall_structure",
+          "conceptual_explanation",
+          "process_analysis",
+          "comparative_reasoning",
+          "system_integration"
+        ],
+        "steps_required_for_hard": true,
+        "allow_real_world_context": true,
+        "requires_unit_handling": false,
+        "hard_question_spec": {
+          "num_concepts": 2,
+          "num_steps": 2,
+          "requires_scenario_analysis": true
+        }
+      },
+      "answer_format_rules": {
+        "allow_decimal": true,
+        "allow_fraction": false,
+        "precision_rules": {
+          "tolerance": 0.05
+        },
+        "unit_required": false,
+        "latex_required_for_equations": true,
+        "step_based_answer_format": false,
+        "keyword_density_check": true
+      },
+      "validation_rules": {
+        "must_have_single_correct_answer": true,
+        "distractors_should_reflect_conceptual_misconceptions": true,
+        "no_biological_impossibilities": true,
+        "verify_factual_accuracy_against_curriculum": true
+      },
+      "common_mistakes_patterns": [
+        "confusing_photosynthesis_and_respiration",
+        "misidentifying_organelle_functions",
+        "thinking_plants_do_not_respire",
+        "mixing_up_macromolecule_monomers",
+        "misunderstanding_polarity_vs_adhesion",
+        "incorrectly_identifying_energy_conversions"
+      ],
+      "semantic_search_weighting": {
+        "definition_weight": 0.4,
+        "visual_diagram_relevance": 0.4,
+        "process_flow_weight": 0.2
+      },
+      "llm_prompt_template": {
+        "system_instructions": "Generate biologically accurate questions focused on middle school level concepts. For Cells, focus on organelle roles and visual identification. For Energy (Photosynthesis/Respiration), focus on inputs, outputs, and locations. For Macromolecules and Water, focus on properties and building blocks. Distractors must reflect common student misconceptions. If a diagram is needed, provide a detailed description for AI generation.",
+        "format_rules": "Use LaTeX for chemical formulas (e.g., $C_6H_{12}O_6$). For non-MCQ, include a list of required keywords in the expected_answer field."
+      },
+      "scoring_rules": {
+        "partial_credit_allowed": true,
+        "keyword_based_scoring": true,
+        "auto_grade_supported": true,
+        "misconception_detection": true
+      }
     }
   ]
 }

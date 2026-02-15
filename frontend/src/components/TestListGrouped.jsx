@@ -7,6 +7,8 @@ import TestList from './TestList'
 export default function TestListGrouped({ statusFilter = null, onTestSelect, isAdmin = false, onTestDeleted, refreshKey = 0 }) {
   const [groupedTests, setGroupedTests] = useState({})
   const [loading, setLoading] = useState(true)
+  const [reevaluating, setReevaluating] = useState({})
+  const [reopening, setReopening] = useState({})
 
   useEffect(() => {
     loadGroupedTests()
@@ -58,6 +60,60 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
     }
   }
 
+  const handleReevaluate = async (testId) => {
+    if (!window.confirm('Are you sure you want to reevaluate this test? This will clear old scores and re-run evaluation on all responses.')) {
+      return
+    }
+    
+    try {
+      setReevaluating(prev => ({ ...prev, [testId]: true }))
+      await tests.reevaluate(testId)
+      showNotification('Test reevaluated successfully', 'success')
+      // Reload grouped tests
+      await loadGroupedTests()
+      if (onTestDeleted) {
+        onTestDeleted(testId)
+      }
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to reevaluate test', 'error')
+      }
+    } finally {
+      setReevaluating(prev => {
+        const newState = { ...prev }
+        delete newState[testId]
+        return newState
+      })
+    }
+  }
+
+  const handleReopen = async (testId) => {
+    if (!window.confirm('Are you sure you want to reopen this test? This will delete all answers and evaluations, and reset the test to active status.')) {
+      return
+    }
+    
+    try {
+      setReopening(prev => ({ ...prev, [testId]: true }))
+      await tests.reopen(testId)
+      showNotification('Test reopened successfully', 'success')
+      // Reload grouped tests
+      await loadGroupedTests()
+      if (onTestDeleted) {
+        onTestDeleted(testId)
+      }
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to reopen test', 'error')
+      }
+    } finally {
+      setReopening(prev => {
+        const newState = { ...prev }
+        delete newState[testId]
+        return newState
+      })
+    }
+  }
+
   const handleDelete = async (testId) => {
     try {
       await tests.delete(testId)
@@ -106,36 +162,35 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
             {/* Child Header */}
             <div
               style={{
-                background: 'linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-dark) 100%)',
-                color: 'white',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-color)',
                 padding: '1.25rem 1.5rem',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                borderBottom: '3px solid rgba(255, 255, 255, 0.2)',
+                borderBottom: '2px solid var(--border-color)',
               }}
             >
               <div>
-                <div style={{ fontSize: '0.75rem', opacity: 0.8, marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
                   Child Profile
                 </div>
-                <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '700' }}>
+                <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '700', color: 'var(--text-color)' }}>
                   {group.child_name || 'Unknown Child'}
+                  {group.child_grade && (
+                    <span style={{ fontSize: '1rem', fontWeight: '500', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
+                      • Grade {group.child_grade}
+                    </span>
+                  )}
                 </h3>
-                {group.child_grade && (
-                  <div style={{ fontSize: '0.875rem', opacity: 0.95, marginTop: '0.5rem', fontWeight: '500' }}>
-                    📚 Grade {group.child_grade}
-                  </div>
-                )}
               </div>
               <div style={{ 
                 fontSize: '1rem', 
-                opacity: 0.95, 
                 fontWeight: '600',
-                background: 'rgba(255, 255, 255, 0.2)',
+                background: 'var(--primary-color-light)',
+                color: 'var(--primary-color)',
                 padding: '0.5rem 1rem',
                 borderRadius: 'var(--radius-md)',
-                backdropFilter: 'blur(10px)'
               }}>
                 {group.total || group.tests.length} test{group.total !== 1 ? 's' : ''}
               </div>
@@ -211,7 +266,7 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
                         </div>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                       <div
                         style={{
                           padding: '0.25rem 0.75rem',
@@ -233,6 +288,60 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
                       >
                         {test.status === 'draft' ? 'Processing' : test.status}
                       </div>
+                      {isAdmin && test.status === 'completed' && (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleReevaluate(test.id)
+                            }}
+                            disabled={reevaluating[test.id]}
+                            style={{
+                              padding: '0.375rem 0.875rem',
+                              borderRadius: 'var(--radius-sm)',
+                              background: 'var(--primary-color)',
+                              color: 'var(--text-color)',
+                              border: 'none',
+                              cursor: reevaluating[test.id] ? 'not-allowed' : 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: '500',
+                              opacity: reevaluating[test.id] ? 0.6 : 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.375rem',
+                            }}
+                            title="Reevaluate test"
+                          >
+                            <span>{reevaluating[test.id] ? '⏳' : '🔄'}</span>
+                            <span>{reevaluating[test.id] ? 'Reevaluating...' : 'Reevaluate'}</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleReopen(test.id)
+                            }}
+                            disabled={reopening[test.id]}
+                            style={{
+                              padding: '0.375rem 0.875rem',
+                              borderRadius: 'var(--radius-sm)',
+                              background: 'var(--warning-color)',
+                              color: 'var(--text-color)',
+                              border: 'none',
+                              cursor: reopening[test.id] ? 'not-allowed' : 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: '500',
+                              opacity: reopening[test.id] ? 0.6 : 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.375rem',
+                            }}
+                            title="Reopen test"
+                          >
+                            <span>{reopening[test.id] ? '⏳' : '🔓'}</span>
+                            <span>{reopening[test.id] ? 'Reopening...' : 'Reopen'}</span>
+                          </button>
+                        </>
+                      )}
                       {isAdmin && (
                         <button
                           onClick={(e) => {

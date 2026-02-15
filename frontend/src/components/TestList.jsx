@@ -7,6 +7,8 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
   const [testList, setTestList] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState({})
+  const [reevaluating, setReevaluating] = useState({})
+  const [reopening, setReopening] = useState({})
 
   useEffect(() => {
     loadTests()
@@ -103,6 +105,68 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
     }
   }
 
+  const handleReevaluate = async (testId, e) => {
+    if (e) {
+      e.stopPropagation()
+    }
+    
+    if (!window.confirm('Are you sure you want to reevaluate this test? This will clear old scores and re-run evaluation on all responses.')) {
+      return
+    }
+    
+    try {
+      setReevaluating(prev => ({ ...prev, [testId]: true }))
+      await tests.reevaluate(testId)
+      showNotification('Test reevaluated successfully', 'success')
+      // Reload tests to show updated scores
+      await loadTests()
+      if (onTestDeleted) {
+        onTestDeleted(testId)
+      }
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to reevaluate test', 'error')
+      }
+    } finally {
+      setReevaluating(prev => {
+        const newState = { ...prev }
+        delete newState[testId]
+        return newState
+      })
+    }
+  }
+
+  const handleReopen = async (testId, e) => {
+    if (e) {
+      e.stopPropagation()
+    }
+    
+    if (!window.confirm('Are you sure you want to reopen this test? This will delete all answers and evaluations, and reset the test to active status.')) {
+      return
+    }
+    
+    try {
+      setReopening(prev => ({ ...prev, [testId]: true }))
+      await tests.reopen(testId)
+      showNotification('Test reopened successfully', 'success')
+      // Reload tests to show updated status
+      await loadTests()
+      if (onTestDeleted) {
+        onTestDeleted(testId)
+      }
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to reopen test', 'error')
+      }
+    } finally {
+      setReopening(prev => {
+        const newState = { ...prev }
+        delete newState[testId]
+        return newState
+      })
+    }
+  }
+
   const handleDelete = async (testId, e) => {
     e.stopPropagation() // Prevent triggering test selection
     
@@ -190,7 +254,7 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
                 </div>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{
                 padding: '0.25rem 0.75rem',
                 borderRadius: 'var(--radius-sm)',
@@ -202,6 +266,54 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
               }}>
                 {getStatusDisplay(test.status)}
               </div>
+              {isAdmin && test.status === 'completed' && (
+                <>
+                  <button
+                    onClick={(e) => handleReevaluate(test.id, e)}
+                    disabled={reevaluating[test.id]}
+                    style={{
+                      padding: '0.375rem 0.875rem',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'var(--primary-color)',
+                      color: 'var(--text-color)',
+                      border: 'none',
+                      cursor: reevaluating[test.id] ? 'not-allowed' : 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      opacity: reevaluating[test.id] ? 0.6 : 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.375rem',
+                    }}
+                    title="Reevaluate test"
+                  >
+                    <span>{reevaluating[test.id] ? '⏳' : '🔄'}</span>
+                    <span>{reevaluating[test.id] ? 'Reevaluating...' : 'Reevaluate'}</span>
+                  </button>
+                  <button
+                    onClick={(e) => handleReopen(test.id, e)}
+                    disabled={reopening[test.id]}
+                    style={{
+                      padding: '0.375rem 0.875rem',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'var(--warning-color)',
+                      color: 'var(--text-color)',
+                      border: 'none',
+                      cursor: reopening[test.id] ? 'not-allowed' : 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      opacity: reopening[test.id] ? 0.6 : 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.375rem',
+                    }}
+                    title="Reopen test"
+                  >
+                    <span>{reopening[test.id] ? '⏳' : '🔓'}</span>
+                    <span>{reopening[test.id] ? 'Reopening...' : 'Reopen'}</span>
+                  </button>
+                </>
+              )}
               {isAdmin && (
                 <button
                   onClick={(e) => handleDelete(test.id, e)}

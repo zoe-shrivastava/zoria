@@ -206,6 +206,77 @@
           ]
         }
       ]
+    },
+    {
+      "subject_name": "Biology",
+      "grades": ["6", "7", "8"],
+      "topics": [
+        {
+          "topic_name": "Cellular Biology",
+          "subtopics": [
+            {
+              "name": "Cell Structure & Function",
+              "keywords": ["organelle", "nucleus", "mitochondria", "cell membrane", "cell wall", "chloroplast", "ribosome", "prokaryote", "eukaryote"],
+              "difficulty": {
+                "easy": ["identifying organelles", "animal vs. plant cells"],
+                "medium": ["matching structure to specific function"],
+                "hard": ["predicting results of organelle failure"]
+              },
+              "prerequisites": []
+            }
+          ]
+        },
+        {
+          "topic_name": "Energy & Metabolism",
+          "subtopics": [
+            {
+              "name": "Photosynthesis",
+              "keywords": ["chlorophyll", "light energy", "glucose", "carbon dioxide", "oxygen", "stomata", "autotroph"],
+              "difficulty": {
+                "easy": ["identifying inputs and outputs"],
+                "medium": ["explaining the role of light and chlorophyll"],
+                "hard": ["analyzing how environmental factors affect rate"]
+              },
+              "prerequisites": ["Cell Structure & Function"]
+            },
+            {
+              "name": "Cellular Respiration",
+              "keywords": ["ATP", "mitochondria", "glucose", "energy release", "aerobic", "anaerobic", "heterotroph"],
+              "difficulty": {
+                "easy": ["defining respiration as energy release"],
+                "medium": ["comparing inputs/outputs with photosynthesis"],
+                "hard": ["explaining ATP's role in cellular work"]
+              },
+              "prerequisites": ["Photosynthesis"]
+            }
+          ]
+        },
+        {
+          "topic_name": "Biochemistry",
+          "subtopics": [
+            {
+              "name": "Water Properties",
+              "keywords": ["polarity", "hydrogen bond", "cohesion", "adhesion", "surface tension", "universal solvent"],
+              "difficulty": {
+                "easy": ["identifying water as a polar molecule"],
+                "medium": ["explaining cohesion and adhesion in plants"],
+                "hard": ["analyzing water's role in temperature regulation"]
+              },
+              "prerequisites": []
+            },
+            {
+              "name": "Macromolecules",
+              "keywords": ["carbohydrates", "lipids", "proteins", "nucleic acids", "monomer", "polymer", "amino acids", "enzymes"],
+              "difficulty": {
+                "easy": ["listing the four main types"],
+                "medium": ["identifying functions (e.g., lipids for storage)"],
+                "hard": ["matching monomers to their specific polymers"]
+              },
+              "prerequisites": []
+            }
+          ]
+        }
+      ]
     }
   ]
 }

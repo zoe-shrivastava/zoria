@@ -7,6 +7,56 @@ Each prompt includes:
 - prompt: The actual prompt text
 """
 
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Cache for subject_topics.json
+_SUBJECT_TOPICS_CACHE: dict | None = None
+
+
+def _load_subject_topics() -> dict:
+    """Load subject_topics.json from backend directory.
+    
+    Returns:
+        Dictionary containing subject topics taxonomy
+    """
+    global _SUBJECT_TOPICS_CACHE
+    if _SUBJECT_TOPICS_CACHE is None:
+        # Use only zoria/backend/subject_topics.json
+        # This file is at zoria/backend/workflows/prompts.py
+        # So parent.parent gives us zoria/backend/
+        config_path = Path(__file__).resolve().parent.parent / "subject_topics.json"
+        
+        if not config_path.exists():
+            logger.error(f"subject_topics.json not found at {config_path}")
+            logger.error(f"Current working directory: {Path.cwd()}")
+            logger.error(f"__file__ location: {Path(__file__).resolve()}")
+            _SUBJECT_TOPICS_CACHE = {}
+            return _SUBJECT_TOPICS_CACHE
+        
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                _SUBJECT_TOPICS_CACHE = json.load(f)
+            logger.info(f"Loaded subject_topics.json from {config_path}")
+        except Exception as e:
+            logger.error(f"Failed to load subject_topics.json from {config_path}: {e}", exc_info=True)
+            _SUBJECT_TOPICS_CACHE = {}
+    
+    return _SUBJECT_TOPICS_CACHE
+
+
+def _get_subject_topics_json_string() -> str:
+    """Get subject_topics.json as a formatted JSON string for embedding in prompts.
+    
+    Returns:
+        JSON string representation of subject topics
+    """
+    topics = _load_subject_topics()
+    return json.dumps(topics, indent=2, ensure_ascii=False)
+
 # Document Parser Agent Prompt
 # Used by: document_parser Agent
 # Purpose: Extracts structured educational content from PDFs/images into Markdown
@@ -161,217 +211,7 @@ Map the content to the provided `subject_topics.json`.
 - **Difficulty:** Categorize based on the complexity described in the taxonomy (easy/medium/hard).
 
 ## 5. Reference Taxonomy (subject_topics.json)
-{
-  "subjects": [
-    {
-      "subject_name": "Mathematics",
-      "grades": ["6", "7", "8"],
-      "topics": [
-        {
-          "topic_name": "Number & Operations",
-          "subtopics": [
-            {
-              "name": "Fractions",
-              "keywords": ["numerator", "denominator", "equivalent fraction", "simplify", "add fractions", "subtract fractions", "multiply fractions", "divide fractions"],
-              "difficulty": {"easy": ["identify fractions", "simplify fractions"], "medium": ["add/subtract fractions with unlike denominators"], "hard": ["multiply/divide mixed fractions"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Decimals",
-              "keywords": ["decimal point", "rounding", "compare decimals", "add decimals", "subtract decimals", "multiply decimals", "divide decimals"],
-              "difficulty": {"easy": ["identify decimal place value"], "medium": ["add/subtract decimals"], "hard": ["multiply/divide decimals"]},
-              "prerequisites": ["Fractions"]
-            },
-            {
-              "name": "Integers",
-              "keywords": ["positive", "negative", "opposite", "absolute value", "add integers", "subtract integers", "multiply integers", "divide integers"],
-              "difficulty": {"easy": ["identify positive/negative numbers"], "medium": ["add/subtract integers"], "hard": ["multiply/divide integers"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Ratios & Proportions",
-              "keywords": ["ratio", "proportion", "equivalent ratios", "percent", "part-to-part", "part-to-whole"],
-              "difficulty": {"easy": ["identify ratios"], "medium": ["solve simple proportions"], "hard": ["solve word problems with ratios/proportions"]},
-              "prerequisites": ["Fractions"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Algebra",
-          "subtopics": [
-            {
-              "name": "Expressions",
-              "keywords": ["variable", "coefficient", "term", "simplify expression", "expand", "factorize"],
-              "difficulty": {"easy": ["identify terms/coefficients"], "medium": ["simplify expressions"], "hard": ["expand/factorize"]},
-              "prerequisites": ["Number & Operations"]
-            },
-            {
-              "name": "Equations",
-              "keywords": ["linear equation", "one-step equation", "two-step equation", "solve for x", "balance equation"],
-              "difficulty": {"easy": ["solve one-step equations"], "medium": ["solve two-step equations"], "hard": ["solve multi-step equations"]},
-              "prerequisites": ["Expressions"]
-            },
-            {
-              "name": "Inequalities",
-              "keywords": ["greater than", "less than", "≤", "≥", "solve inequality", "graph inequality"],
-              "difficulty": {"easy": ["identify inequality"], "medium": ["solve simple inequality"], "hard": ["graph inequalities on number line"]},
-              "prerequisites": ["Expressions", "Equations"]
-            },
-            {
-              "name": "Functions",
-              "keywords": ["linear function", "input-output table", "coordinate plane", "slope", "y-intercept"],
-              "difficulty": {"easy": ["identify input-output pairs"], "medium": ["plot linear function"], "hard": ["interpret slope and y-intercept"]},
-              "prerequisites": ["Algebra: Expressions", "Number & Operations"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Geometry",
-          "subtopics": [
-            {
-              "name": "Shapes & Angles",
-              "keywords": ["polygon", "triangle", "quadrilateral", "circle", "angle sum", "acute", "obtuse", "right angle"],
-              "difficulty": {"easy": ["identify shapes/angles"], "medium": ["calculate missing angles"], "hard": ["solve complex angle problems"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Perimeter & Area",
-              "keywords": ["perimeter", "area", "square", "rectangle", "triangle", "circle", "formula"],
-              "difficulty": {"easy": ["calculate perimeter of simple shapes"], "medium": ["calculate area of triangles/rectangles"], "hard": ["area of composite shapes/circle"]},
-              "prerequisites": ["Shapes & Angles"]
-            },
-            {
-              "name": "Volume & Surface Area",
-              "keywords": ["cube", "cuboid", "prism", "cylinder", "surface area", "volume", "formula"],
-              "difficulty": {"easy": ["identify 3D shapes"], "medium": ["calculate volume of prism/cylinder"], "hard": ["calculate surface area of composite solids"]},
-              "prerequisites": ["Perimeter & Area"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Data & Probability",
-          "subtopics": [
-            {
-              "name": "Statistics",
-              "keywords": ["mean", "median", "mode", "range", "bar graph", "line graph", "histogram"],
-              "difficulty": {"easy": ["calculate mean/median/mode"], "medium": ["interpret graphs"], "hard": ["solve word problems using statistics"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Probability",
-              "keywords": ["probability", "chance", "event", "certain", "impossible", "likely", "unlikely"],
-              "difficulty": {"easy": ["identify probability"], "medium": ["calculate probability of simple events"], "hard": ["solve probability word problems"]},
-              "prerequisites": ["Number & Operations"]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "subject_name": "Physics",
-      "grades": ["6", "7", "8"],
-      "topics": [
-        {
-          "topic_name": "Motion & Forces",
-          "subtopics": [
-            {
-              "name": "Speed & Velocity",
-              "keywords": ["distance", "displacement", "speed", "velocity", "formula", "time", "direction"],
-              "difficulty": {"easy": ["define speed/velocity"], "medium": ["calculate speed/velocity"], "hard": ["solve multi-step motion problems"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Acceleration",
-              "keywords": ["change in velocity", "acceleration", "formula", "units"],
-              "difficulty": {"easy": ["define acceleration"], "medium": ["calculate acceleration"], "hard": ["motion graph analysis"]},
-              "prerequisites": ["Speed & Velocity"]
-            },
-            {
-              "name": "Forces",
-              "keywords": ["Newton's laws", "force", "mass", "gravity", "friction", "tension"],
-              "difficulty": {"easy": ["identify forces"], "medium": ["apply Newton’s laws"], "hard": ["solve multi-step force problems"]},
-              "prerequisites": ["Acceleration"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Energy",
-          "subtopics": [
-            {
-              "name": "Forms of Energy",
-              "keywords": ["kinetic", "potential", "mechanical", "thermal", "chemical", "electrical"],
-              "difficulty": {"easy": ["identify energy types"], "medium": ["calculate kinetic/potential energy"], "hard": ["energy transformation problems"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Conservation of Energy",
-              "keywords": ["law of conservation", "mechanical energy", "total energy", "transformation"],
-              "difficulty": {"easy": ["state conservation law"], "medium": ["apply conservation principle"], "hard": ["multi-step energy problems"]},
-              "prerequisites": ["Forms of Energy"]
-            },
-            {
-              "name": "Work & Power",
-              "keywords": ["work done", "force", "distance", "power", "formula", "units"],
-              "difficulty": {"easy": ["define work/power"], "medium": ["calculate work/power"], "hard": ["multi-step work/power problems"]},
-              "prerequisites": ["Forms of Energy"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Light & Optics",
-          "subtopics": [
-            {
-              "name": "Reflection",
-              "keywords": ["mirror", "incident ray", "reflected ray", "angle of incidence", "angle of reflection"],
-              "difficulty": {"easy": ["define reflection"], "medium": ["apply law of reflection"], "hard": ["solve reflection problems"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Refraction",
-              "keywords": ["refraction", "lens", "concave", "convex", "focal point", "light bending"],
-              "difficulty": {"easy": ["define refraction"], "medium": ["trace refracted rays"], "hard": ["solve lens problems"]},
-              "prerequisites": ["Reflection"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Electricity & Magnetism",
-          "subtopics": [
-            {
-              "name": "Circuits",
-              "keywords": ["current", "voltage", "resistor", "battery", "series circuit", "parallel circuit", "conductors", "insulators"],
-              "difficulty": {"easy": ["identify circuit components"], "medium": ["calculate simple series/parallel circuits"], "hard": ["analyze complex circuits"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Magnetism",
-              "keywords": ["magnetic field", "magnet", "attraction", "repulsion", "Earth’s magnetic field"],
-              "difficulty": {"easy": ["identify magnets"], "medium": ["describe magnetic fields"], "hard": ["calculate magnetic forces"]},
-              "prerequisites": ["Circuits"]
-            }
-          ]
-        },
-        {
-          "topic_name": "Matter & Properties",
-          "subtopics": [
-            {
-              "name": "States of Matter",
-              "keywords": ["solid", "liquid", "gas", "plasma", "phase change"],
-              "difficulty": {"easy": ["identify states"], "medium": ["describe phase changes"], "hard": ["problem-solving with density/volume/mass"]},
-              "prerequisites": []
-            },
-            {
-              "name": "Density & Pressure",
-              "keywords": ["density", "mass", "volume", "pressure", "formula", "units"],
-              "difficulty": {"easy": ["define density/pressure"], "medium": ["calculate density/pressure"], "hard": ["multi-step word problems"]},
-              "prerequisites": ["States of Matter"]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
+{subject_topics_json}
 
 
 ## 6. Output Schema
@@ -431,14 +271,23 @@ def get_prompt(key: str) -> str:
         key: Prompt key (e.g., 'document_parser', 'concept_extractor')
         
     Returns:
-        Prompt text
+        Prompt text with subject_topics.json injected if needed
         
     Raises:
         KeyError: If prompt key not found
     """
     if key not in PROMPTS:
         raise KeyError(f"Prompt '{key}' not found. Available prompts: {list(PROMPTS.keys())}")
-    return PROMPTS[key]["prompt"]
+    
+    prompt_text = PROMPTS[key]["prompt"]
+    
+    # Inject subject_topics.json for concept_extractor prompt
+    # Use .replace() instead of .format() to avoid issues with curly braces in JSON
+    if key == "concept_extractor":
+        subject_topics_json = _get_subject_topics_json_string()
+        prompt_text = prompt_text.replace("{subject_topics_json}", subject_topics_json)
+    
+    return prompt_text
 
 
 def list_prompts() -> dict:

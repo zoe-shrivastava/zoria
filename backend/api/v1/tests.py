@@ -48,18 +48,18 @@ def get_embedding_service() -> EmbeddingService:
 
 def get_llm_service() -> LLMService:
     """Dependency to get LLM service."""
-    # Use OpenAI GPT-5-nano for question generation
+    # Use local Ollama for question generation and evaluation
     try:
         from core.database import get_db
         return LLMService(
-            model_name="gpt-5-nano",
+            model_name="llama3.2:3b-instruct-fp16",
             enable_logging=True,
             context_source="question_generation"
         )
     except Exception:
         # Fallback if database not available
         return LLMService(
-            model_name="gpt-5-nano",
+            model_name="llama3.2:3b-instruct-fp16",
             enable_logging=False,
             context_source="question_generation"
         )

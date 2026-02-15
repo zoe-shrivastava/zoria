@@ -792,42 +792,31 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             {currentQuestion.section_title || 'Question'}
             {currentQuestion.difficulty && ` • ${currentQuestion.difficulty}`}
           </div>
-          {!readOnly && !isCompleted && (
-            hint ? (
-              <button
-                type="button"
-                onClick={toggleHint}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.5rem 1rem',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  background: showHints[questionId] ? 'var(--primary-color-light)' : 'transparent',
-                  color: showHints[questionId] ? 'var(--primary-color)' : 'var(--text-color)',
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  fontWeight: showHints[questionId] ? '600' : '400',
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                </svg>
-                {showHints[questionId] ? 'Hide Hint' : 'Show Hint'}
-              </button>
-            ) : (
-              <div style={{
-                fontSize: '0.75rem',
-                color: 'var(--text-muted)',
-                fontStyle: 'italic',
-                padding: '0.5rem 1rem'
-              }}>
-                No hint available
-              </div>
-            )
+          {!readOnly && !isCompleted && hint && (
+            <button
+              type="button"
+              onClick={toggleHint}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.5rem 1rem',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                background: showHints[questionId] ? 'var(--primary-color-light)' : 'transparent',
+                color: showHints[questionId] ? 'var(--primary-color)' : 'var(--text-color)',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: showHints[questionId] ? '600' : '400',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+              {showHints[questionId] ? 'Hide Hint' : 'Show Hint'}
+            </button>
           )}
         </div>
         <div style={{ fontSize: '1.125rem', marginBottom: '1.5rem', lineHeight: '1.6' }}>

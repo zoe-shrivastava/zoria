@@ -11,7 +11,8 @@ from services.user_service import UserService
 from services.document_service import DocumentService
 from services.llm_logging_service import LLMLoggingService
 from core.dependencies import get_current_admin
-from core.database import get_db
+from core.database import get_db, Database
+from database.repositories.test_repository import TestRepository
 
 router = APIRouter()
 
@@ -478,6 +479,124 @@ async def list_llm_logs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list LLM logs: {str(e)}"
+        )
+
+
+@router.post("/tests/{test_id}/reevaluate")
+async def reevaluate_test(
+    test_id: str,
+    admin: dict = Depends(get_current_admin),
+    db: Database = Depends(get_db)
+):
+    """Reevaluate a completed test (admin only).
+    
+    This will:
+    1. Clear old evaluation data (scores, is_correct, evaluation metadata)
+    2. Re-run evaluation on all responses
+    3. Update test scores
+    
+    POST /api/v1/admin/tests/{test_id}/reevaluate
+    """
+    try:
+        from services.scoring_service import ScoringService
+        from services.mastery_service import MasteryService
+        from services.llm_service import LLMService
+        
+        test_repo = TestRepository(db)
+        
+        # Get LLM service for scoring service
+        llm_service = LLMService()
+        scoring_service = ScoringService(db, embedding_service=None, llm_service=llm_service)
+        mastery_service = MasteryService(db)
+        
+        # Get test to verify it exists and is completed
+        test = await test_repo.get_test_by_id(test_id)
+        if not test:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Test not found"
+            )
+        
+        if test['status'] != 'completed':
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot reevaluate test with status: {test['status']}. Test must be completed."
+            )
+        
+        # Clear old evaluation data (keeps answers, clears scores)
+        await test_repo.clear_evaluation_data(test_id)
+        
+        # Re-run evaluation
+        scoring_result = await scoring_service.grade_test(test_id)
+        
+        # Update mastery scores based on new evaluation
+        # The method gets child_id from the test itself
+        await mastery_service.update_mastery_from_test(test_id)
+        
+        return {
+            "success": True,
+            "test_id": test_id,
+            "message": "Test reevaluated successfully",
+            "scoring_result": scoring_result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to reevaluate test: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reevaluate test: {str(e)}"
+        )
+
+
+@router.post("/tests/{test_id}/reopen")
+async def reopen_test(
+    test_id: str,
+    admin: dict = Depends(get_current_admin),
+    db: Database = Depends(get_db)
+):
+    """Reopen a completed test for submission (admin only).
+    
+    This will:
+    1. Delete all answers and evaluations
+    2. Reset test status to 'active'
+    3. Clear completion timestamps
+    
+    POST /api/v1/admin/tests/{test_id}/reopen
+    """
+    try:
+        test_repo = TestRepository(db)
+        
+        # Get test to verify it exists
+        test = await test_repo.get_test_by_id(test_id)
+        if not test:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Test not found"
+            )
+        
+        # Clear all responses (answers and evaluations)
+        await test_repo.clear_all_responses(test_id)
+        
+        # Reset test status
+        await test_repo.reset_test_for_reopen(test_id)
+        
+        return {
+            "success": True,
+            "test_id": test_id,
+            "message": "Test reopened successfully. All answers and evaluations have been cleared."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to reopen test: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reopen test: {str(e)}"
         )
 
 
