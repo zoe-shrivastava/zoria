@@ -599,7 +599,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <strong>{strength.concept}</strong>
+                    <strong>{formatSubjectName(strength.concept)}</strong>
                     <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>
                       Accuracy: {strength.accuracy}% • Score: {strength.score_percentage}%
                       {' • '}

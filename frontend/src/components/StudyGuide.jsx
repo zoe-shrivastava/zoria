@@ -6,6 +6,11 @@ import MathText from './MathText'
 import RevisionCard from './RevisionCard'
 import { showNotification } from '../utils/notifications'
 
+// Import remark-gfm for GitHub Flavored Markdown table support
+// Install with: npm install remark-gfm
+// eslint-disable-next-line import/no-unresolved
+import remarkGfm from 'remark-gfm'
+
 export default function StudyGuide({ 
   guideId, 
   onClose,
@@ -516,6 +521,7 @@ export default function StudyGuide({
         boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
       }}>
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             // Helper to extract text from React children for LaTeX rendering
             // eslint-disable-next-line react/prop-types
@@ -754,6 +760,19 @@ export default function StudyGuide({
             ),
             // eslint-disable-next-line react/prop-types
             th: ({ children }) => {
+              // Helper to check if children contains already-rendered React elements (like KaTeX)
+              const hasReactElements = (node) => {
+                if (node === null || node === undefined) return false
+                if (typeof node === 'string' || typeof node === 'number') return false
+                if (Array.isArray(node)) return node.some(hasReactElements)
+                // If it's an object with type, it's likely a React element
+                if (typeof node === 'object' && node !== null) {
+                  return node.type !== undefined || node.props !== undefined
+                }
+                return false
+              }
+              
+              // Helper to extract text from React children for LaTeX rendering
               const extractText = (node) => {
                 if (typeof node === 'string') return node
                 if (typeof node === 'number') return String(node)
@@ -761,6 +780,23 @@ export default function StudyGuide({
                 if (node?.props?.children) return extractText(node.props.children)
                 return ''
               }
+              
+              // If children contains React elements (already rendered LaTeX), preserve them
+              if (hasReactElements(children)) {
+                return (
+                  <th style={{
+                    padding: '0.75rem 1rem',
+                    textAlign: 'left',
+                    fontWeight: '600',
+                    color: 'var(--primary-color)',
+                    borderRight: '1px solid var(--border-color)'
+                  }}>
+                    {children}
+                  </th>
+                )
+              }
+              
+              // Otherwise, extract text and render with MathText
               const text = extractText(children)
               return (
                 <th style={{
@@ -776,6 +812,19 @@ export default function StudyGuide({
             },
             // eslint-disable-next-line react/prop-types
             td: ({ children }) => {
+              // Helper to check if children contains already-rendered React elements (like KaTeX)
+              const hasReactElements = (node) => {
+                if (node === null || node === undefined) return false
+                if (typeof node === 'string' || typeof node === 'number') return false
+                if (Array.isArray(node)) return node.some(hasReactElements)
+                // If it's an object with type, it's likely a React element
+                if (typeof node === 'object' && node !== null) {
+                  return node.type !== undefined || node.props !== undefined
+                }
+                return false
+              }
+              
+              // Helper to extract text from React children for LaTeX rendering
               const extractText = (node) => {
                 if (typeof node === 'string') return node
                 if (typeof node === 'number') return String(node)
@@ -783,6 +832,20 @@ export default function StudyGuide({
                 if (node?.props?.children) return extractText(node.props.children)
                 return ''
               }
+              
+              // If children contains React elements (already rendered LaTeX), preserve them
+              if (hasReactElements(children)) {
+                return (
+                  <td style={{
+                    padding: '0.75rem 1rem',
+                    borderRight: '1px solid var(--border-color)'
+                  }}>
+                    {children}
+                  </td>
+                )
+              }
+              
+              // Otherwise, extract text and render with MathText
               const text = extractText(children)
               return (
                 <td style={{

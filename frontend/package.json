@@ -12,6 +12,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.0",
     "react-force-graph-2d": "^1.25.3",
     "fabric": "^5.3.0"
   },
