@@ -295,12 +295,25 @@ export default function StudyGuide({ guideId, onClose }) {
   }
   
   const handleNextCard = () => {
-    setCurrentCardIndex((prev) => (prev + 1) % revisionCards.length)
+    setCurrentCardIndex((prev) => {
+      if (revisionCards.length === 0) return 0
+      return (prev + 1) % revisionCards.length
+    })
   }
   
   const handlePrevCard = () => {
-    setCurrentCardIndex((prev) => (prev - 1 + revisionCards.length) % revisionCards.length)
+    setCurrentCardIndex((prev) => {
+      if (revisionCards.length === 0) return 0
+      return (prev - 1 + revisionCards.length) % revisionCards.length
+    })
   }
+  
+  // Reset card index when revision cards change
+  useEffect(() => {
+    if (revisionCards.length > 0 && currentCardIndex >= revisionCards.length) {
+      setCurrentCardIndex(0)
+    }
+  }, [revisionCards.length, currentCardIndex])
 
   if (loading) return <LoadingSpinner />
   if (!guide) return <div>Study guide not found</div>
@@ -397,74 +410,85 @@ export default function StudyGuide({ guideId, onClose }) {
       </div>
 
       {/* Revision Cards Section */}
-      {showRevisionCards && revisionCards.length > 0 && (
-        <div style={{
-          background: 'var(--bg-secondary)',
-          padding: '2rem',
-          borderRadius: 'var(--radius-md)',
-          marginBottom: '2rem',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            marginBottom: '1.5rem'
+      {showRevisionCards && revisionCards.length > 0 && (() => {
+        // Ensure currentCardIndex is within bounds
+        const safeIndex = Math.max(0, Math.min(currentCardIndex, revisionCards.length - 1))
+        const currentCard = revisionCards[safeIndex]
+        
+        // If card is invalid, don't render
+        if (!currentCard || !currentCard.front || !currentCard.back) {
+          return null
+        }
+        
+        return (
+          <div style={{
+            background: 'var(--bg-secondary)',
+            padding: '2rem',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '2rem',
+            border: '1px solid var(--border-color)'
           }}>
-            <h3 style={{ 
-              margin: 0,
-              fontSize: '1.375rem',
-              fontWeight: '600',
-              color: 'var(--text-primary)',
-              borderBottom: '2px solid var(--border-color)',
-              paddingBottom: '0.5rem'
-            }}>Revision Cards</h3>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button
-                onClick={handlePrevCard}
-                className="btn-secondary"
-                disabled={revisionCards.length <= 1}
-                style={{ padding: '0.5rem 1rem' }}
-              >
-                ← Prev
-              </button>
-              <span style={{ 
-                padding: '0.5rem 1rem',
-                background: 'var(--bg-primary)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '0.875rem'
-              }}>
-                {currentCardIndex + 1} / {revisionCards.length}
-              </span>
-              <button
-                onClick={handleNextCard}
-                className="btn-secondary"
-                disabled={revisionCards.length <= 1}
-                style={{ padding: '0.5rem 1rem' }}
-              >
-                Next →
-              </button>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '1.5rem'
+            }}>
+              <h3 style={{ 
+                margin: 0,
+                fontSize: '1.375rem',
+                fontWeight: '600',
+                color: 'var(--text-primary)',
+                borderBottom: '2px solid var(--border-color)',
+                paddingBottom: '0.5rem'
+              }}>Revision Cards</h3>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  onClick={handlePrevCard}
+                  className="btn-secondary"
+                  disabled={revisionCards.length <= 1}
+                  style={{ padding: '0.5rem 1rem' }}
+                >
+                  ← Prev
+                </button>
+                <span style={{ 
+                  padding: '0.5rem 1rem',
+                  background: 'var(--bg-primary)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.875rem'
+                }}>
+                  {safeIndex + 1} / {revisionCards.length}
+                </span>
+                <button
+                  onClick={handleNextCard}
+                  className="btn-secondary"
+                  disabled={revisionCards.length <= 1}
+                  style={{ padding: '0.5rem 1rem' }}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+            
+            <RevisionCard
+              front={currentCard.front}
+              back={currentCard.back}
+              cardNumber={safeIndex + 1}
+              totalCards={revisionCards.length}
+              onFlip={handleCardFlip}
+            />
+            
+            <div style={{ 
+              marginTop: '1.5rem', 
+              textAlign: 'center',
+              fontSize: '0.875rem',
+              color: 'var(--text-muted)'
+            }}>
+              Click the card to flip it. Use the navigation buttons to move between cards.
             </div>
           </div>
-          
-          <RevisionCard
-            front={revisionCards[currentCardIndex].front}
-            back={revisionCards[currentCardIndex].back}
-            cardNumber={currentCardIndex + 1}
-            totalCards={revisionCards.length}
-            onFlip={handleCardFlip}
-          />
-          
-          <div style={{ 
-            marginTop: '1.5rem', 
-            textAlign: 'center',
-            fontSize: '0.875rem',
-            color: 'var(--text-muted)'
-          }}>
-            Click the card to flip it. Use the navigation buttons to move between cards.
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Key Points */}
       {guide.key_points && guide.key_points.length > 0 && (

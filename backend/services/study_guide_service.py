@@ -192,10 +192,13 @@ Format your response as a well-structured, comprehensive study guide with clear 
             
             logger.info(f"Extracted content length: {len(content)} characters")
             
-            # Extract key points and recommendations using LLM
-            logger.info("Extracting structured data from study guide")
-            structured_data = await self._extract_structured_data(content, concept_name, focus_area)
-            logger.info(f"Extracted structured data: {len(structured_data.get('key_points', []))} key points, {len(structured_data.get('practice_recommendations', []))} recommendations")
+            # Use empty arrays - the markdown content already contains all information
+            # No need for intermediate JSON extraction since markdown is the source of truth
+            structured_data = {
+                'key_points': [],
+                'practice_recommendations': [],
+                'related_concepts': []
+            }
             
             # Generate revision cards using LLM
             logger.info(f"Generating revision cards for {concept_name}")
@@ -526,8 +529,11 @@ Review the provided text and generate:
 ### OUTPUT RULES:
 - If a problem in the text has a calculation error or uses an incorrect formula for the given variables, correct it in the card output.
 - Every card must be self-contained (no "as seen in example 1" references).
-- Use double backslashes for all LaTeX: `\\vec{F} = ma`.
-- Return ONLY the raw JSON array `[...]`.
+- Use proper LaTeX syntax with single backslashes in JSON: \vec{{F}} = ma, \frac{{1}}{{2}}, \text{{units}}
+- Use actual newlines (\n) to separate steps, NOT escaped backslashes
+- Remove any [LaTeX] markers - just include the actual LaTeX formulas
+- CRITICAL: For sample problems, include the COMPLETE problem statement in the "front" field - do NOT truncate with "..." or ellipsis. Include all given values and what is being asked.
+- CRITICAL: Return a JSON ARRAY of cards, starting with [ and ending with ]. Do NOT return a single object.
 
 ### OUTPUT JSON EXAMPLE:
 [
@@ -536,8 +542,8 @@ Review the provided text and generate:
     "back": "The formula is: $$KE = \\frac{{1}}{{2}}mv^2$$\n\nWhere:\n- $m$ is mass\n- $v$ is velocity"
   }},
   {{
-    "front": "Sample Problem: [Context]",
-    "back": "Step 1: [Action]\n\nStep 2: [Calculation]\n\nFinal Answer: [Value]"
+    "front": "Sample Problem: A cart starts from rest and accelerates uniformly at 2.0 m/s² for 5 seconds. Find the final velocity and distance traveled.",
+    "back": "Step 1: Identify given values\n\nInitial velocity $u = 0 \\text{{ m/s}}$\nAcceleration $a = 2.0 \\text{{ m/s}}^2$\nTime $t = 5 \\text{{ s}}$\n\n\nStep 2: Apply formula $v = u + at$\n\n\nStep 3: Calculate final velocity\n\n$$v = 0 + (2.0)(5) = 10.0 \\text{{ m/s}}$$\n\n\nStep 4: Calculate distance using $s = ut + \\frac{{1}}{{2}}at^2$\n\n$$s = (0)(5) + \\frac{{1}}{{2}}(2.0)(5)^2 = 25 \\text{{ m}}$$\n\n\nFinal Answer: The final velocity is 10.0 m/s and the distance traveled is 25 m."
   }}
 ]
 """
@@ -550,142 +556,187 @@ You are a specialist in transforming long-form Study Guides into high-utility ac
 - **Definitions**: Identify core terms. Format: Front: "What is [Term]?"; Back: Scientific definition.
 - **Formulas**: Extract LaTeX formulas. You MUST provide a "Variable Legend" defining every symbol used.
 - **Step-by-Step Solutions**: 
-    - Include every numbered step from the text. 
+    - Include the COMPLETE problem statement in the "front" field - do NOT truncate with "..."
+    - Include every numbered step from the text in the "back" field.
     - **Logic Guardrail**: If the source text suggests a formula that does not match the variables given (e.g., using F=ma when only velocity/time are provided), you must correct the logic to use the mathematically sound formula.
 - **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` is properly closed. Verify syntax like `\\text{m s}^{-1}`.
 
 ## 2. FORMATTING & JSON SAFETY (CRITICAL)
 - **JSON Structure**: Output a RAW JSON ARRAY only. 
-  - **Start with `[` and end with `]`.** - Do NOT wrap the array in a "cards" key. 
+  - **MUST start with `[` and end with `]`** - This is an array, not a single object.
+  - **Do NOT return a single card object** - Always return an array, even if it has only one card.
+  - Do NOT wrap the array in a "cards" key. 
   - Do NOT include markdown code blocks (```json).
-- **Double-Backslash Rule**: Every LaTeX command must use double-backslashes (e.g., `\\frac`, `\\vec`).
-- **Escaped Newlines**: Use `\n\n` to separate steps in the "back" field.
+- **LaTeX Syntax**: Use single backslashes in JSON output (e.g., `\frac`, `\vec`, `\text`). The JSON parser will handle escaping.
+- **Newlines**: Use actual newline characters `\n` (not escaped backslashes) to separate steps in the "back" field.
+- **Step Formatting**: For step-by-step solutions, use DOUBLE newlines (`\n\n`) between each numbered step (Step 1, Step 2, etc.) to ensure clear visual separation.
+- **Line Breaks**: Each step should be on its own line, with a blank line between steps for readability.
+- **Clean Output**: Remove any [LaTeX] markers or placeholder text - include only actual LaTeX formulas.
 
 ## 3. CONTENT DENSITY
-- **Front**: Concise question or prompt (< 100 chars).
-- **Back**: Comprehensive but clear (< 1000 chars).
+- **Front**: Concise question or prompt (keep it readable, but no strict length limit).
+- **Back**: Comprehensive and detailed - include all necessary information, formulas, steps, and explanations. No length limit - be thorough.
 """
 
         try:
             response = await self.llm_service.generate_json(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                max_tokens=2000
+                max_tokens=4000  # Increased to allow longer, more detailed revision cards
             )
+            
+            logger.info(f"LLM response type for revision cards: {type(response)}")
+            logger.debug(f"LLM response for revision cards (first 500 chars): {str(response)[:500]}")
             
             # Parse response
             cards = []
             if isinstance(response, dict):
+                logger.debug(f"Response is dict with keys: {list(response.keys())}")
                 if 'cards' in response:
                     cards = response['cards']
+                    logger.debug(f"Found 'cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
                 elif 'revision_cards' in response:
                     cards = response['revision_cards']
+                    logger.debug(f"Found 'revision_cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
+                elif 'front' in response and 'back' in response:
+                    # LLM returned a single card object instead of an array - wrap it
+                    logger.debug("LLM returned a single card object, wrapping in array")
+                    cards = [response]
                 else:
                     # Try to extract cards from any array field
                     for key, value in response.items():
                         if isinstance(value, list):
                             cards = value
+                            logger.debug(f"Found array in key '{key}' with {len(cards)} items")
                             break
             elif isinstance(response, list):
                 cards = response
+                logger.debug(f"Response is list with {len(cards)} items")
             elif isinstance(response, str):
                 import json
                 try:
                     parsed = json.loads(response)
+                    logger.debug(f"Parsed string response, type: {type(parsed)}")
                     if isinstance(parsed, list):
                         cards = parsed
-                    elif isinstance(parsed, dict) and 'cards' in parsed:
-                        cards = parsed['cards']
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse revision cards JSON: {response[:200]}")
+                    elif isinstance(parsed, dict):
+                        if 'cards' in parsed:
+                            cards = parsed['cards']
+                        elif 'front' in parsed and 'back' in parsed:
+                            # Single card object - wrap it
+                            logger.debug("Parsed string contains single card object, wrapping in array")
+                            cards = [parsed]
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse revision cards JSON: {e}")
+                    logger.warning(f"Response content (first 500 chars): {response[:500]}")
                     cards = []
+            else:
+                logger.warning(f"Unexpected response type: {type(response)}")
+            
+            logger.info(f"Extracted {len(cards)} cards from LLM response")
             
             # Validate and clean cards
+            import re
             valid_cards = []
-            for card in cards:
+            for idx, card in enumerate(cards):
                 if isinstance(card, dict) and 'front' in card and 'back' in card:
                     # Ensure front and back are strings
-                    front = str(card.get('front', '')).strip()
-                    back = str(card.get('back', '')).strip()
-                    if front and back and len(front) < 200 and len(back) < 2000:
+                    # Use repr to preserve escape sequences, then decode
+                    front_raw = card.get('front', '')
+                    back_raw = card.get('back', '')
+                    
+                    # Convert to string, handling both string and other types
+                    if isinstance(front_raw, str):
+                        front = front_raw
+                    else:
+                        front = str(front_raw)
+                    
+                    if isinstance(back_raw, str):
+                        back = back_raw
+                    else:
+                        back = str(back_raw)
+                    
+                    # Fix LaTeX commands that lost their backslashes due to Python escape sequence interpretation
+                    # When JSON contains "\frac", Python's json.loads interprets \f as form feed (\x0c)
+                    # So "\frac" becomes form feed character + "rac"
+                    
+                    # First, fix form feed characters that should be \frac
+                    # Pattern: form feed followed by "rac" -> "\frac"
+                    front = re.sub(r'\x0crac', r'\\frac', front)
+                    back = re.sub(r'\x0crac', r'\\frac', back)
+                    
+                    # Also fix form feed followed by any LaTeX-like pattern (in case of other commands)
+                    # Pattern: form feed + letter sequence that looks like LaTeX command
+                    # Match form feed followed by lowercase letters (LaTeX commands are lowercase)
+                    front = re.sub(r'\x0c([a-z]+)', r'\\\1', front)  # form feed + command -> \command
+                    back = re.sub(r'\x0c([a-z]+)', r'\\\1', back)
+                    
+                    # Fix any remaining form feed characters - they're likely from \f in JSON
+                    # Remove standalone form feeds (not followed by a letter that could be a command)
+                    front = re.sub(r'\x0c(?!\w)', '', front)  # Remove form feed if not followed by word char
+                    back = re.sub(r'\x0c(?!\w)', '', back)
+                    
+                    # Also check for form feed in the middle of text (like "KE = \x0c\frac")
+                    # Replace form feed + backslash + command with just backslash + command
+                    front = re.sub(r'\x0c\\', r'\\', front)
+                    back = re.sub(r'\x0c\\', r'\\', back)
+                    
+                    # Fix other common LaTeX commands that might have lost backslashes
+                    # Pattern: "rac{" -> "\frac{" (when backslash was lost)
+                    front = re.sub(r'([^\\])rac\{', r'\1\\frac{', front)
+                    back = re.sub(r'([^\\])rac\{', r'\1\\frac{', back)
+                    front = re.sub(r'^rac\{', r'\\frac{', front)
+                    back = re.sub(r'^rac\{', r'\\frac{', back)
+                    
+                    # Fix "ext{" -> "\text{" (when backslash was lost)
+                    front = re.sub(r'([^\\])ext\{', r'\1\\text{', front)
+                    back = re.sub(r'([^\\])ext\{', r'\1\\text{', back)
+                    front = re.sub(r'^ext\{', r'\\text{', front)
+                    back = re.sub(r'^ext\{', r'\\text{', back)
+                    
+                    # Normalize LaTeX: fix double backslashes and escaped newlines
+                    # Replace \\\\ with \\ (for over-escaped backslashes)
+                    # But be careful - we want to preserve actual double backslashes that are needed
+                    # Only normalize if we have 4+ consecutive backslashes
+                    front = re.sub(r'\\\\{3,}', r'\\\\', front)
+                    back = re.sub(r'\\\\{3,}', r'\\\\', back)
+                    
+                    # Replace literal \n strings with actual newlines (if they're escaped as \\n)
+                    back = back.replace('\\n', '\n')
+                    front = front.replace('\\n', '\n')
+                    
+                    # Remove [LaTeX] markers that LLM sometimes adds
+                    back = re.sub(r'\[LaTeX\]', '', back, flags=re.IGNORECASE)
+                    back = re.sub(r'\[latex\]', '', back, flags=re.IGNORECASE)
+                    front = re.sub(r'\[LaTeX\]', '', front, flags=re.IGNORECASE)
+                    front = re.sub(r'\[latex\]', '', front, flags=re.IGNORECASE)
+                    
+                    # Clean up multiple consecutive newlines (more than 2)
+                    back = re.sub(r'\n{3,}', '\n\n', back)
+                    front = re.sub(r'\n{3,}', '\n\n', front)
+                    
+                    # Strip whitespace
+                    front = front.strip()
+                    back = back.strip()
+                    
+                    if front and back:
                         valid_cards.append({
                             'front': front,
                             'back': back
                         })
+                    else:
+                        logger.debug(f"Card {idx} filtered out: front empty or back empty")
+                else:
+                    logger.debug(f"Card {idx} invalid: type={type(card)}, has_front={'front' in card if isinstance(card, dict) else False}, has_back={'back' in card if isinstance(card, dict) else False}")
             
-            logger.info(f"Generated {len(valid_cards)} valid revision cards for {concept_name}")
+            logger.info(f"Generated {len(valid_cards)} valid revision cards for {concept_name} (from {len(cards)} total cards)")
+            if valid_cards:
+                logger.debug(f"First card example: front='{valid_cards[0]['front'][:50]}...', back='{valid_cards[0]['back'][:50]}...'")
             return valid_cards
             
         except Exception as e:
             logger.warning(f"Failed to generate revision cards using LLM: {e}", exc_info=True)
             return []
-    
-    async def _extract_structured_data(
-        self,
-        content: str,
-        concept_name: str,
-        focus_area: str
-    ) -> Dict[str, Any]:
-        """Extract structured data (key points, recommendations) from study guide."""
-        prompt = f"""Extract structured information from this study guide:
-
-{content}
-
-Please provide:
-1. Key Points (3-5 main points as a JSON array)
-2. Practice Recommendations (3-5 recommendations as a JSON array)
-3. Related Concepts (concepts that should be reviewed, as a JSON array)
-
-Format as JSON:
-{{
-  "key_points": ["point1", "point2", ...],
-  "practice_recommendations": ["rec1", "rec2", ...],
-  "related_concepts": ["concept1", "concept2", ...]
-}}"""
-        
-        try:
-            response = await self.llm_service.generate_json(
-                prompt=prompt,
-                system_prompt="You are a helpful assistant that extracts structured data from text.",
-                max_tokens=500
-            )
-            
-            result = {}
-            if isinstance(response, dict):
-                result = response
-            elif isinstance(response, str):
-                result = json.loads(response)
-            
-            # Normalize arrays to ensure they contain only strings
-            def normalize_array(arr):
-                if not isinstance(arr, list):
-                    return []
-                normalized = []
-                for item in arr:
-                    if isinstance(item, str):
-                        normalized.append(item)
-                    elif isinstance(item, dict):
-                        # Extract text from dict (could be 'title', 'text', 'description', etc.)
-                        text = item.get('title') or item.get('text') or item.get('description') or item.get('point') or str(item)
-                        normalized.append(str(text))
-                    else:
-                        normalized.append(str(item))
-                return normalized
-            
-            return {
-                'key_points': normalize_array(result.get('key_points', [])),
-                'practice_recommendations': normalize_array(result.get('practice_recommendations', [])),
-                'related_concepts': normalize_array(result.get('related_concepts', []))
-            }
-        except Exception as e:
-            logger.warning(f"Failed to extract structured data: {e}", exc_info=True)
-        
-        # Fallback: return empty structure
-        return {
-            'key_points': [],
-            'practice_recommendations': [],
-            'related_concepts': []
-        }
     
     async def _save_study_guide(
         self,
@@ -860,8 +911,18 @@ Format as JSON:
                 if isinstance(guide_dict['metadata'], str):
                     try:
                         guide_dict['metadata'] = json.loads(guide_dict['metadata'])
-                    except (json.JSONDecodeError, TypeError):
+                        logger.debug(f"Parsed metadata string, revision_cards present: {'revision_cards' in guide_dict['metadata']}")
+                        if 'revision_cards' in guide_dict['metadata']:
+                            logger.info(f"Found {len(guide_dict['metadata']['revision_cards'])} revision cards in metadata")
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"Failed to parse metadata JSON: {e}")
                         guide_dict['metadata'] = {}
+                elif isinstance(guide_dict['metadata'], dict):
+                    logger.debug(f"Metadata is already dict, revision_cards present: {'revision_cards' in guide_dict['metadata']}")
+                    if 'revision_cards' in guide_dict['metadata']:
+                        logger.info(f"Found {len(guide_dict['metadata']['revision_cards'])} revision cards in metadata")
+            else:
+                logger.debug("No metadata found in guide")
             return guide_dict
         return None
     
