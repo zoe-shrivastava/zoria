@@ -1,5 +1,6 @@
 """Test/Quiz API endpoints."""
 
+import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, Query
@@ -71,14 +72,14 @@ def get_evaluation_llm_service() -> LLMService:
     try:
         from core.database import get_db
         return LLMService(
-            model_name="llama3.2:3b-instruct-fp16",
+            model_name="llama3.1",
             enable_logging=True,
             context_source="evaluation"
         )
     except Exception:
         # Fallback if database not available
         return LLMService(
-            model_name="llama3.2:3b-instruct-fp16",
+            model_name="llama3.1",
             enable_logging=False,
             context_source="evaluation"
         )
@@ -629,22 +630,42 @@ async def get_test(
             )
         
         # Convert to response model
-        questions = [
-            TestQuestionResponse(
-                question_id=uuid_to_str(q.get('question_id', q.get('id'))),
-                text=q.get('text', ''),
-                type=q.get('type', 'short_answer'),
-                difficulty=q.get('difficulty'),
-                order_index=q.get('order_index', 0),
-                section_title=q.get('section_title'),
-                max_score=float(q.get('max_score', 1.0)),
-                metadata=q.get('metadata'),
-                answer=q.get('answer') if user_role == "child" or test['status'] == 'completed' else None,
-                score=q.get('score') if test['status'] == 'completed' else None,
-                is_correct=q.get('is_correct') if test['status'] == 'completed' else None
+        questions = []
+        for q in test.get('questions', []):
+            # Safely extract detailed_feedback - ensure it's a string or None
+            detailed_feedback = None
+            if test['status'] == 'completed':
+                feedback_value = q.get('detailed_feedback')
+                if feedback_value is not None and feedback_value != '':
+                    # Convert to string if it's not already
+                    if isinstance(feedback_value, str):
+                        detailed_feedback = feedback_value
+                    elif isinstance(feedback_value, (dict, list)):
+                        # If it's a dict or list, convert to JSON string
+                        try:
+                            detailed_feedback = json.dumps(feedback_value)
+                        except (TypeError, ValueError):
+                            detailed_feedback = str(feedback_value)
+                    else:
+                        # Convert other types to string
+                        detailed_feedback = str(feedback_value)
+            
+            questions.append(
+                TestQuestionResponse(
+                    question_id=uuid_to_str(q.get('question_id', q.get('id'))),
+                    text=q.get('text', ''),
+                    type=q.get('type', 'short_answer'),
+                    difficulty=q.get('difficulty'),
+                    order_index=q.get('order_index', 0),
+                    section_title=q.get('section_title'),
+                    max_score=float(q.get('max_score', 1.0)),
+                    metadata=q.get('metadata'),
+                    answer=q.get('answer') if user_role == "child" or test['status'] == 'completed' else None,
+                    score=q.get('score') if test['status'] == 'completed' else None,
+                    is_correct=q.get('is_correct') if test['status'] == 'completed' else None,
+                    detailed_feedback=detailed_feedback
+                )
             )
-            for q in test.get('questions', [])
-        ]
         
         return TestResponse(
             id=uuid_to_str(test['id']),

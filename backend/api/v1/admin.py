@@ -506,7 +506,7 @@ async def reevaluate_test(
         
         # Get LLM service for evaluation (uses Ollama)
         llm_service = LLMService(
-            model_name="llama3.2:3b-instruct-fp16",
+            model_name="llama3.1",
             enable_logging=True,
             context_source="evaluation"
         )

@@ -8,7 +8,7 @@ import DiagramDrawingCanvas from './DiagramDrawingCanvas'
 import MatchingQuestionWidget from './MatchingQuestionWidget'
 import FillInBlankWidget from './FillInBlankWidget'
 
-export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
+export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdmin = false }) {
   const [test, setTest] = useState(null)
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -741,8 +741,493 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
     correctText &&
     (!hasStudentAnswer || currentQuestion.is_correct === false)
 
+  // Helper function to render a single question (for reuse in all-questions view)
+  const renderQuestion = (question, questionIndex, showAllQuestions = false) => {
+    const qId = question.question_id
+    const qAnswer = answers[qId]
+    const qAnswerComponents = parseAnswer(qAnswer)
+    const qHasAnswer = qAnswer !== undefined && qAnswer !== null && qAnswer !== ''
+    const qType = question.type || 'short_answer'
+    const qIsMCQ = qType === 'multiple_choice'
+    const qIsMatching = qType === 'matching'
+    const qIsFillInBlank = qType === 'fill_in_the_blank'
+    const qIsProblemSolving = qType === 'problem_solving'
+    const qIsConceptual = qType === 'conceptual_question'
+    const qOptions = question.metadata?.options || []
+    
+    // Get hint for this question
+    let qHint = null
+    const fallbackHints = [
+      "Review the key concepts related to this question.",
+      "Consider each option carefully and identify the key concept being tested.",
+      "Think about the key formula or concept needed to solve this problem.",
+      "Break down the problem into steps and identify what information you need."
+    ]
+    
+    if (question.metadata) {
+      const metadataHint = question.metadata.hint
+      const isFallbackHint = metadataHint && fallbackHints.includes(metadataHint.trim())
+      
+      let blueprintHint = null
+      if (question.metadata.blueprint) {
+        if (typeof question.metadata.blueprint === 'object') {
+          blueprintHint = question.metadata.blueprint.hint
+        } else if (typeof question.metadata.blueprint === 'string') {
+          try {
+            const blueprint = JSON.parse(question.metadata.blueprint)
+            blueprintHint = blueprint.hint
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      }
+      
+      if (isFallbackHint && blueprintHint && blueprintHint.trim() && !fallbackHints.includes(blueprintHint.trim())) {
+        qHint = blueprintHint
+      } else if (metadataHint && metadataHint.trim()) {
+        qHint = metadataHint
+      } else if (blueprintHint && blueprintHint.trim()) {
+        qHint = blueprintHint
+      }
+    }
+    
+    if (!qHint) {
+      qHint = question.hint
+    }
+    
+    // Determine correct answer (MCQ)
+    let qCorrectIndex = null
+    let qCorrectText = null
+    let qCorrectLabel = null
+    if (qIsMCQ && question.metadata?.correct_answer) {
+      const letter = String(question.metadata.correct_answer).trim().toUpperCase()
+      if (['A', 'B', 'C', 'D'].includes(letter)) {
+        const idx = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+        if (idx >= 0 && idx < qOptions.length) {
+          qCorrectIndex = idx
+          qCorrectText = qOptions[idx]
+          qCorrectLabel = letter
+        }
+      }
+    }
+    
+    const qShouldShowCorrect =
+      isCompleted &&
+      qIsMCQ &&
+      qCorrectText &&
+      (!qHasAnswer || question.is_correct === false)
+    
+    // Extract expected answer and detailed feedback
+    let qExpectedAnswer = null
+    if (question.metadata) {
+      qExpectedAnswer = question.metadata.expected_answer
+      if (!qExpectedAnswer && question.metadata.blueprint) {
+        if (typeof question.metadata.blueprint === 'object') {
+          qExpectedAnswer = question.metadata.blueprint.expected_answer
+        } else if (typeof question.metadata.blueprint === 'string') {
+          try {
+            const blueprint = JSON.parse(question.metadata.blueprint)
+            qExpectedAnswer = blueprint.expected_answer
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+    
+    // Normalize expected answer
+    let qNormalizedExpectedAnswer = qExpectedAnswer
+    if (qExpectedAnswer) {
+      if (typeof qNormalizedExpectedAnswer === 'string') {
+        if (qNormalizedExpectedAnswer.trim().startsWith('[')) {
+          try {
+            const parsed = JSON.parse(qNormalizedExpectedAnswer)
+            if (Array.isArray(parsed)) {
+              qNormalizedExpectedAnswer = parsed
+            }
+          } catch (e) {
+            const pythonListMatch = qNormalizedExpectedAnswer.match(/^\[(['"])(.*?)\1\]$/)
+            if (pythonListMatch) {
+              qNormalizedExpectedAnswer = pythonListMatch[2]
+            } else {
+              const bracketMatch = qNormalizedExpectedAnswer.match(/^\[(.*)\]$/)
+              if (bracketMatch) {
+                let content = bracketMatch[1].trim()
+                if ((content.startsWith("'") && content.endsWith("'")) || 
+                    (content.startsWith('"') && content.endsWith('"'))) {
+                  content = content.slice(1, -1)
+                }
+                content = content.replace(/\\'/g, "'").replace(/\\"/g, '"')
+                qNormalizedExpectedAnswer = content
+              }
+            }
+          }
+        }
+      }
+      
+      if (Array.isArray(qNormalizedExpectedAnswer)) {
+        qNormalizedExpectedAnswer = qNormalizedExpectedAnswer.length === 1 
+          ? qNormalizedExpectedAnswer[0] 
+          : qNormalizedExpectedAnswer.join(' ')
+      }
+      
+      if (typeof qNormalizedExpectedAnswer !== 'string') {
+        qNormalizedExpectedAnswer = String(qNormalizedExpectedAnswer)
+      }
+      
+      while (qNormalizedExpectedAnswer.includes('\\\\')) {
+        qNormalizedExpectedAnswer = qNormalizedExpectedAnswer.replace(/\\\\/g, '\\')
+      }
+    }
+    
+    const qDetailedFeedback = question.detailed_feedback
+    const qIsIncorrect = question.is_correct === false
+    // Check if answer is partially correct (has score but less than max)
+    const qIsPartiallyCorrect = question.score != null && question.max_score != null && 
+                                 question.score < question.max_score && question.score > 0
+    // Show feedback for incorrect (score = 0 or is_correct = false) or partially correct answers
+    const qShouldShowFeedback = qDetailedFeedback && (qIsIncorrect || qIsPartiallyCorrect || 
+                                 (question.score != null && question.score === 0))
+    
+    // Format detailed feedback - handle JSON objects/strings
+    let qFormattedFeedback = qDetailedFeedback
+    if (qDetailedFeedback && typeof qDetailedFeedback === 'string') {
+      try {
+        // Try to parse as JSON
+        const parsed = JSON.parse(qDetailedFeedback)
+        if (typeof parsed === 'object' && parsed !== null) {
+          // Format the JSON object into readable text
+          const parts = []
+          if (parsed.process_evaluation) {
+            parts.push(parsed.process_evaluation)
+          }
+          if (parsed.semantic_equivalence) {
+            parts.push(parsed.semantic_equivalence)
+          }
+          if (parsed.multi_part_answer_analysis) {
+            if (typeof parsed.multi_part_answer_analysis === 'object') {
+              const analysisParts = []
+              if (parsed.multi_part_answer_analysis.units) {
+                analysisParts.push(parsed.multi_part_answer_analysis.units)
+              }
+              // Add any other analysis fields
+              Object.keys(parsed.multi_part_answer_analysis).forEach(key => {
+                if (key !== 'units' && parsed.multi_part_answer_analysis[key]) {
+                  analysisParts.push(parsed.multi_part_answer_analysis[key])
+                }
+              })
+              if (analysisParts.length > 0) {
+                parts.push(analysisParts.join(' '))
+              }
+            } else {
+              parts.push(parsed.multi_part_answer_analysis)
+            }
+          }
+          // If we couldn't format it nicely, use the original JSON string
+          qFormattedFeedback = parts.length > 0 ? parts.join('\n\n') : qDetailedFeedback
+        }
+      } catch (e) {
+        // Not JSON, use as-is
+        qFormattedFeedback = qDetailedFeedback
+      }
+    } else if (qDetailedFeedback && typeof qDetailedFeedback === 'object') {
+      // Already an object, format it
+      const parts = []
+      if (qDetailedFeedback.process_evaluation) {
+        parts.push(qDetailedFeedback.process_evaluation)
+      }
+      if (qDetailedFeedback.semantic_equivalence) {
+        parts.push(qDetailedFeedback.semantic_equivalence)
+      }
+      if (qDetailedFeedback.multi_part_answer_analysis) {
+        if (typeof qDetailedFeedback.multi_part_answer_analysis === 'object') {
+          const analysisParts = []
+          if (qDetailedFeedback.multi_part_answer_analysis.units) {
+            analysisParts.push(qDetailedFeedback.multi_part_answer_analysis.units)
+          }
+          // Add any other analysis fields
+          Object.keys(qDetailedFeedback.multi_part_answer_analysis).forEach(key => {
+            if (key !== 'units' && qDetailedFeedback.multi_part_answer_analysis[key]) {
+              analysisParts.push(qDetailedFeedback.multi_part_answer_analysis[key])
+            }
+          })
+          if (analysisParts.length > 0) {
+            parts.push(analysisParts.join(' '))
+          }
+        } else {
+          parts.push(qDetailedFeedback.multi_part_answer_analysis)
+        }
+      }
+      qFormattedFeedback = parts.length > 0 ? parts.join('\n\n') : JSON.stringify(qDetailedFeedback, null, 2)
+    }
+    
+    // Debug logging for detailed feedback
+    if (isCompleted && !qIsMCQ) {
+      console.log('Question feedback debug:', {
+        questionId: question.question_id,
+        hasDetailedFeedback: !!qDetailedFeedback,
+        detailedFeedback: qDetailedFeedback,
+        isIncorrect: qIsIncorrect,
+        isPartiallyCorrect: qIsPartiallyCorrect,
+        score: question.score,
+        maxScore: question.max_score,
+        shouldShowFeedback: qShouldShowFeedback,
+        isCorrect: question.is_correct
+      })
+    }
+    
+    // Extract solution steps
+    let qSolutionSteps = null
+    if (question.metadata) {
+      qSolutionSteps = question.metadata.solution_steps
+      if (!qSolutionSteps && question.metadata.blueprint) {
+        if (typeof question.metadata.blueprint === 'object') {
+          qSolutionSteps = question.metadata.blueprint.solution_steps
+        } else if (typeof question.metadata.blueprint === 'string') {
+          try {
+            const blueprint = JSON.parse(question.metadata.blueprint)
+            qSolutionSteps = blueprint.solution_steps
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+    
+    return (
+      <div key={qId} style={{
+        background: '#fafbfc',
+        border: '1px solid var(--border-color)',
+        borderRadius: 'var(--radius-md)',
+        padding: '1.5rem',
+        marginBottom: showAllQuestions ? '2rem' : '1.5rem',
+      }}>
+        <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+            Question {questionIndex + 1} {question.section_title ? `• ${question.section_title}` : ''}
+            {question.difficulty && ` • ${question.difficulty}`}
+          </div>
+        </div>
+        
+        <div style={{ fontSize: '1.125rem', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+          <MathText text={question.text} />
+          {question.metadata?.diagram_code && (() => {
+            const normalizeTikzCode = (code) => {
+              if (!code) return ''
+              return code.replace(/\\\\/g, '\\').replace(/\s+/g, ' ').trim()
+            }
+            const metadataDiagram = normalizeTikzCode(question.metadata.diagram_code)
+            const questionText = question.text || ''
+            const hasDiagramInText = 
+              questionText.includes('Diagram (LaTeX)') ||
+              questionText.includes('\\begin{tikzpicture}') ||
+              questionText.includes('<script type="text/tikz">') ||
+              questionText.includes("Diagram (LaTeX):")
+            const normalizedQuestionText = normalizeTikzCode(questionText)
+            const diagramInText = normalizedQuestionText.includes(metadataDiagram) && metadataDiagram.length > 20
+            
+            if (!hasDiagramInText && !diagramInText) {
+              return (
+                <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+                  <MathText text={`Diagram (LaTeX): ${question.metadata.diagram_code}`} />
+                </div>
+              )
+            }
+            return null
+          })()}
+        </div>
+        
+        {/* Answer Display (read-only for completed tests) */}
+        {isCompleted && (
+          <div style={{
+            marginBottom: '1rem',
+            padding: '1rem',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+          }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>
+              Your Answer:
+            </div>
+            {qHasAnswer ? (
+              qIsMCQ ? (
+                <div>
+                  {qOptions.map((opt, idx) => (
+                    <div key={idx} style={{
+                      padding: '0.5rem',
+                      background: qAnswer === String(idx) ? 'var(--primary-color-light)' : 'transparent',
+                      borderRadius: 'var(--radius-sm)',
+                      marginBottom: '0.25rem',
+                    }}>
+                      {String.fromCharCode('A'.charCodeAt(0) + idx)}) <MathText text={opt} inline />
+                      {qAnswer === String(idx) && <span style={{ marginLeft: '0.5rem', color: 'var(--primary-color)' }}>✓ Selected</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {qAnswerComponents.text || '(No text answer)'}
+                  {qAnswerComponents.graph && <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>[Graph drawing included]</div>}
+                  {qAnswerComponents.diagram && <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>[Diagram drawing included]</div>}
+                </div>
+              )
+            ) : (
+              <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No answer provided</div>
+            )}
+          </div>
+        )}
+        
+        {/* Show score if completed */}
+        {isCompleted && question.score !== null && (
+          <div style={{
+            marginTop: '1rem',
+            padding: '0.75rem',
+            background: question.is_correct ? 'var(--success-color-light)' : 'var(--error-color-light)',
+            borderRadius: 'var(--radius-md)',
+            color: question.is_correct ? 'var(--success-color)' : 'var(--error-color)',
+          }}>
+            {question.is_correct ? '✓ Correct' : '✗ Incorrect'} 
+            {question.score !== undefined && ` (${question.score}/${question.max_score} points)`}
+          </div>
+        )}
+        
+        {/* Show correct answer for MCQ */}
+        {qShouldShowCorrect && (
+          <div style={{
+            marginTop: '0.75rem',
+            padding: '0.75rem',
+            background: 'var(--bg-secondary)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px dashed var(--border-color)',
+            fontSize: '0.95rem',
+            lineHeight: 1.5,
+          }}>
+            {!qHasAnswer ? (
+              <div style={{ marginBottom: '0.25rem' }}>You did not answer this question.</div>
+            ) : (
+              <div style={{ marginBottom: '0.25rem' }}>Your answer was incorrect.</div>
+            )}
+            <div style={{ marginBottom: '0.5rem' }}>
+              <strong>Correct answer:</strong>{' '}
+              {qCorrectLabel ? `${qCorrectLabel}) ` : ''}
+              <MathText text={qCorrectText} inline />
+            </div>
+          </div>
+        )}
+        
+        {/* Show expected answer and detailed feedback for non-MCQ */}
+        {isCompleted && !qIsMCQ && (qNormalizedExpectedAnswer || qShouldShowFeedback) && (
+          <div>
+            {qNormalizedExpectedAnswer && (
+              <div style={{
+                marginTop: '0.75rem',
+                padding: '0.75rem',
+                background: 'var(--bg-secondary)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--border-color)',
+                fontSize: '0.95rem',
+                lineHeight: 1.5,
+              }}>
+                <div>
+                  <strong>Expected answer:</strong>{' '}
+                  <MathText text={qNormalizedExpectedAnswer} inline />
+                </div>
+              </div>
+            )}
+            
+            {qShouldShowFeedback && (
+              <div style={{
+                marginTop: '0.75rem',
+                padding: '1rem',
+                background: 'var(--error-color-light)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--error-color)',
+                borderLeft: '4px solid var(--error-color)',
+                fontSize: '0.95rem',
+                lineHeight: 1.6,
+              }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  color: 'var(--error-color)',
+                  marginBottom: '0.75rem'
+                }}>
+                  📝 Detailed Explanation
+                </div>
+                <div style={{ color: 'var(--text-color)', whiteSpace: 'pre-wrap' }}>
+                  <MathText text={qFormattedFeedback} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Show solution steps */}
+        {isCompleted && qSolutionSteps && Array.isArray(qSolutionSteps) && qSolutionSteps.length > 0 && (
+          <div style={{
+            marginTop: '1rem',
+            padding: '1rem',
+            background: 'var(--primary-color-light)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--primary-color)',
+            borderLeft: '4px solid var(--primary-color)',
+          }}>
+            <div style={{
+              fontSize: '0.875rem',
+              fontWeight: '600',
+              color: 'var(--primary-color)',
+              marginBottom: '0.75rem'
+            }}>
+              📚 Solution Steps
+            </div>
+            <ol style={{
+              margin: 0,
+              paddingLeft: '1.5rem',
+              listStyleType: 'decimal',
+            }}>
+              {qSolutionSteps.map((step, idx) => {
+                const normalizedStep = typeof step === 'string' 
+                  ? step.replace(/\\\\/g, '\\') 
+                  : step
+                return (
+                  <li key={idx} style={{
+                    marginBottom: '0.75rem',
+                    fontSize: '0.95rem',
+                    lineHeight: 1.6,
+                  }}>
+                    <MathText text={normalizedStep} />
+                  </li>
+                )
+              })}
+            </ol>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
-    <div className="quiz-player" style={{ padding: '1.5rem' }}>
+    <div className="quiz-player" style={{ padding: '1.5rem', position: 'relative' }}>
+      {/* Evaluation Overlay - Show when submitting/evaluating */}
+      {submitting && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          borderRadius: 'var(--radius-md)',
+        }}>
+          <LoadingSpinner size="large" text="Evaluating..." />
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -753,33 +1238,43 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             </div>
           )}
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div>Question {currentQuestionIndex + 1} of {questions.length}</div>
-          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-            {answeredCount} answered
+        {!isCompleted && (
+          <div style={{ textAlign: 'right' }}>
+            <div>Question {currentQuestionIndex + 1} of {questions.length}</div>
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+              {answeredCount} answered
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Progress Bar - Only show for active tests */}
+      {!isCompleted && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{
+            width: '100%',
+            height: '8px',
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '4px',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              width: `${((currentQuestionIndex + 1) / questions.length) * 100}%`,
+              height: '100%',
+              backgroundColor: 'var(--primary-color)',
+              transition: 'width 0.3s',
+            }} />
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Progress Bar */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{
-          width: '100%',
-          height: '8px',
-          backgroundColor: 'var(--bg-tertiary)',
-          borderRadius: '4px',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            width: `${((currentQuestionIndex + 1) / questions.length) * 100}%`,
-            height: '100%',
-            backgroundColor: 'var(--primary-color)',
-            transition: 'width 0.3s',
-          }} />
+      {/* Show all questions if completed, otherwise show single question */}
+      {isCompleted ? (
+        <div>
+          {questions.map((q, idx) => renderQuestion(q, idx, true))}
         </div>
-      </div>
-
-      {/* Question */}
+      ) : (
+        /* Single Question View */
       <div style={{
         background: '#fafbfc',
         border: '1px solid var(--border-color)',
@@ -796,6 +1291,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             <button
               type="button"
               onClick={toggleHint}
+              disabled={submitting || isGraphRendering}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -805,9 +1301,10 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                 borderRadius: 'var(--radius-md)',
                 background: showHints[questionId] ? 'var(--primary-color-light)' : 'transparent',
                 color: showHints[questionId] ? 'var(--primary-color)' : 'var(--text-color)',
-                cursor: 'pointer',
+                cursor: submitting || isGraphRendering ? 'not-allowed' : 'pointer',
                 fontSize: '0.875rem',
                 fontWeight: showHints[questionId] ? '600' : '400',
+                opacity: submitting || isGraphRendering ? 0.6 : 1,
               }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -944,7 +1441,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                   value={idx}
                   checked={answers[currentQuestion.question_id] === String(idx)}
                   onChange={(e) => handleAnswerChange(currentQuestion.question_id, e.target.value)}
-                  disabled={readOnly || isCompleted || isGraphRendering}
+                  disabled={submitting || readOnly || isCompleted || isGraphRendering}
                   style={{ marginRight: '0.75rem' }}
                 />
                 <span>
@@ -958,14 +1455,14 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             question={currentQuestion}
             answer={answerComponents.text}
             onChange={(value) => handleAnswerComponentChange(questionId, 'text', value)}
-            disabled={readOnly || isCompleted || isGraphRendering}
+            disabled={submitting || readOnly || isCompleted || isGraphRendering}
           />
         ) : isFillInBlank ? (
           <FillInBlankWidget
             question={currentQuestion}
             answer={answerComponents.text}
             onChange={(value) => handleAnswerComponentChange(questionId, 'text', value)}
-            disabled={readOnly || isCompleted || isGraphRendering}
+            disabled={submitting || readOnly || isCompleted || isGraphRendering}
           />
         ) : (
           <div>
@@ -991,7 +1488,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             <textarea
               value={answerComponents.text}
               onChange={(e) => handleAnswerComponentChange(questionId, 'text', e.target.value)}
-              disabled={readOnly || isCompleted || isGraphRendering}
+              disabled={submitting || readOnly || isCompleted || isGraphRendering}
               placeholder={
                 isGraphRendering 
                   ? 'Please wait for diagrams to finish rendering...' 
@@ -1026,7 +1523,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                   <button
                     type="button"
                     onClick={() => toggleCanvas('showGraph')}
-                    disabled={readOnly || isCompleted || isGraphRendering}
+                    disabled={submitting || readOnly || isCompleted || isGraphRendering}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -1054,7 +1551,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                   <button
                     type="button"
                     onClick={() => toggleCanvas('showDiagram')}
-                    disabled={readOnly || isCompleted || isGraphRendering}
+                    disabled={submitting || readOnly || isCompleted || isGraphRendering}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -1304,8 +1801,13 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
           // Extract detailed_feedback from response metadata
           const detailedFeedback = currentQuestion.detailed_feedback
           const isIncorrect = currentQuestion.is_correct === false
+          // Check if answer is partially correct (has score but less than max)
+          const isPartiallyCorrect = currentQuestion.score != null && currentQuestion.max_score != null && 
+                                     currentQuestion.score < currentQuestion.max_score && currentQuestion.score > 0
+          // Show feedback for incorrect or partially correct answers
+          const shouldShowFeedback = detailedFeedback && (isIncorrect || isPartiallyCorrect)
           
-          if (expectedAnswer || (isIncorrect && detailedFeedback)) {
+          if (expectedAnswer || shouldShowFeedback) {
             // Handle array format (convert to string) and normalize backslashes
             let normalizedExpectedAnswer = expectedAnswer
             
@@ -1377,6 +1879,97 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             // Extract detailed_feedback from response metadata
             const detailedFeedback = currentQuestion.detailed_feedback
             const isIncorrect = currentQuestion.is_correct === false
+            // Check if answer is partially correct (has score but less than max)
+            const isPartiallyCorrect = currentQuestion.score != null && currentQuestion.max_score != null && 
+                                       currentQuestion.score < currentQuestion.max_score && currentQuestion.score > 0
+            // Show feedback for incorrect (score = 0 or is_correct = false) or partially correct answers
+            const shouldShowFeedback = detailedFeedback && (isIncorrect || isPartiallyCorrect || 
+                                       (currentQuestion.score != null && currentQuestion.score === 0))
+            
+            // Format detailed feedback - handle JSON objects/strings
+            let formattedFeedback = detailedFeedback
+            if (detailedFeedback && typeof detailedFeedback === 'string') {
+              try {
+                // Try to parse as JSON
+                const parsed = JSON.parse(detailedFeedback)
+                if (typeof parsed === 'object' && parsed !== null) {
+                  // Format the JSON object into readable text
+                  const parts = []
+                  if (parsed.process_evaluation) {
+                    parts.push(parsed.process_evaluation)
+                  }
+                  if (parsed.semantic_equivalence) {
+                    parts.push(parsed.semantic_equivalence)
+                  }
+                  if (parsed.multi_part_answer_analysis) {
+                    if (typeof parsed.multi_part_answer_analysis === 'object') {
+                      const analysisParts = []
+                      if (parsed.multi_part_answer_analysis.units) {
+                        analysisParts.push(parsed.multi_part_answer_analysis.units)
+                      }
+                      // Add any other analysis fields
+                      Object.keys(parsed.multi_part_answer_analysis).forEach(key => {
+                        if (key !== 'units' && parsed.multi_part_answer_analysis[key]) {
+                          analysisParts.push(parsed.multi_part_answer_analysis[key])
+                        }
+                      })
+                      if (analysisParts.length > 0) {
+                        parts.push(analysisParts.join(' '))
+                      }
+                    } else {
+                      parts.push(parsed.multi_part_answer_analysis)
+                    }
+                  }
+                  // If we couldn't format it nicely, use the original JSON string
+                  formattedFeedback = parts.length > 0 ? parts.join('\n\n') : detailedFeedback
+                }
+              } catch (e) {
+                // Not JSON, use as-is
+                formattedFeedback = detailedFeedback
+              }
+            } else if (detailedFeedback && typeof detailedFeedback === 'object') {
+              // Already an object, format it
+              const parts = []
+              if (detailedFeedback.process_evaluation) {
+                parts.push(detailedFeedback.process_evaluation)
+              }
+              if (detailedFeedback.semantic_equivalence) {
+                parts.push(detailedFeedback.semantic_equivalence)
+              }
+              if (detailedFeedback.multi_part_answer_analysis) {
+                if (typeof detailedFeedback.multi_part_answer_analysis === 'object') {
+                  const analysisParts = []
+                  if (detailedFeedback.multi_part_answer_analysis.units) {
+                    analysisParts.push(detailedFeedback.multi_part_answer_analysis.units)
+                  }
+                  // Add any other analysis fields
+                  Object.keys(detailedFeedback.multi_part_answer_analysis).forEach(key => {
+                    if (key !== 'units' && detailedFeedback.multi_part_answer_analysis[key]) {
+                      analysisParts.push(detailedFeedback.multi_part_answer_analysis[key])
+                    }
+                  })
+                  if (analysisParts.length > 0) {
+                    parts.push(analysisParts.join(' '))
+                  }
+                } else {
+                  parts.push(detailedFeedback.multi_part_answer_analysis)
+                }
+              }
+              formattedFeedback = parts.length > 0 ? parts.join('\n\n') : JSON.stringify(detailedFeedback, null, 2)
+            }
+            
+            // Debug logging for detailed feedback
+            console.log('Single question view feedback debug:', {
+              questionId: currentQuestion.question_id,
+              hasDetailedFeedback: !!detailedFeedback,
+              detailedFeedback: detailedFeedback,
+              isIncorrect: isIncorrect,
+              isPartiallyCorrect: isPartiallyCorrect,
+              score: currentQuestion.score,
+              maxScore: currentQuestion.max_score,
+              shouldShowFeedback: shouldShowFeedback,
+              isCorrect: currentQuestion.is_correct
+            })
             
             return (
               <div>
@@ -1399,8 +1992,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                   </div>
                 )}
                 
-                {/* Show detailed feedback for incorrect answers */}
-                {isIncorrect && detailedFeedback && (
+                {/* Show detailed feedback for incorrect or partially correct answers */}
+                {shouldShowFeedback && (
                   <div
                     style={{
                       marginTop: '0.75rem',
@@ -1421,8 +2014,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                     }}>
                       📝 Detailed Explanation
                     </div>
-                    <div style={{ color: 'var(--text-color)' }}>
-                      <MathText text={detailedFeedback} />
+                    <div style={{ color: 'var(--text-color)', whiteSpace: 'pre-wrap' }}>
+                      <MathText text={formattedFeedback} />
                     </div>
                   </div>
                 )}
@@ -1506,12 +2099,14 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
           return null
         })()}
       </div>
+      )}
 
-      {/* Navigation */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+      {/* Navigation - Only show for active tests */}
+      {!isCompleted && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
         <button
           onClick={() => setCurrentQuestionIndex(Math.max(0, currentQuestionIndex - 1))}
-          disabled={currentQuestionIndex === 0 || isGraphRendering}
+          disabled={submitting || currentQuestionIndex === 0 || isGraphRendering}
           className="btn-secondary"
           title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : ''}
         >
@@ -1522,7 +2117,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             <button
               key={idx}
               onClick={() => setCurrentQuestionIndex(idx)}
-              disabled={isGraphRendering}
+              disabled={submitting || isGraphRendering}
               style={{
                 width: '32px',
                 height: '32px',
@@ -1548,7 +2143,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
         {currentQuestionIndex < questions.length - 1 ? (
           <button
             onClick={() => setCurrentQuestionIndex(Math.min(questions.length - 1, currentQuestionIndex + 1))}
-            disabled={isGraphRendering}
+            disabled={submitting || isGraphRendering}
             className="btn-primary"
             title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : ''}
           >
@@ -1564,7 +2159,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             {submitting ? 'Submitting...' : isGraphRendering ? 'Rendering diagrams...' : 'Submit Test'}
           </button>
         )}
-      </div>
+        </div>
+      )}
 
       {/* Results Summary + Download */}
       {isCompleted && test.total_score !== null && (
@@ -1590,14 +2186,21 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                 ? `Percentage: ${((test.total_score / test.max_score) * 100).toFixed(1)}%`
                 : null}
             </div>
+            {test.updated_at && (
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                Last evaluated: {new Date(test.updated_at).toLocaleString()}
+              </div>
+            )}
           </div>
-          <button
-            onClick={handleDownload}
-            className="btn-secondary"
-            style={{ marginLeft: 'auto' }}
-          >
-            Download Test (TXT)
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleDownload}
+              className="btn-secondary"
+              style={{ marginLeft: 'auto' }}
+            >
+              Download Test (TXT)
+            </button>
+          )}
         </div>
       )}
     </div>

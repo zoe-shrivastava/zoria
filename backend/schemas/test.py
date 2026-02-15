@@ -42,6 +42,7 @@ class TestQuestionResponse(BaseModel):
     answer: Optional[str] = None
     score: Optional[float] = None
     is_correct: Optional[bool] = None
+    detailed_feedback: Optional[str] = Field(None, description="Detailed feedback about what is wrong, what is missing, or what is correct")
 
 
 class TestResponse(BaseModel):

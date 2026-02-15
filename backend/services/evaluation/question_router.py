@@ -26,13 +26,16 @@ class QuestionRouter:
         self.llm_evaluator = LLMEvaluator(llm_service) if llm_service else None
         
         # Routing map: question_type -> evaluator_type
+        # All non-MCQ questions use LLM evaluation for detailed feedback and step evaluation
         self.routing_map = {
             'multiple_choice': 'deterministic',
             'matching': 'deterministic',
             'fill_in_the_blank': 'deterministic',
-            'short_answer': 'heuristic',  # Can be numerical or text
+            'short_answer': 'llm',  # Use LLM for all short answers to get detailed feedback
             'problem_solving': 'llm',  # Complex FRQ
             'conceptual_question': 'llm',  # Requires understanding assessment
+            'essay': 'llm',  # Essay questions need LLM evaluation
+            'free_response': 'llm',  # Free response questions
         }
     
     async def evaluate(
@@ -64,7 +67,9 @@ class QuestionRouter:
             Tuple of (is_correct, score, method_detected, error_type, misconception, detailed_feedback)
         """
         # Determine evaluator type
-        evaluator_type = self.routing_map.get(question_type, 'deterministic')
+        # Default to LLM for unknown question types (assume non-MCQ)
+        # Only use deterministic for known MCQ types
+        evaluator_type = self.routing_map.get(question_type, 'llm')
         
         logger.debug(
             f"Routing question type '{question_type}' to '{evaluator_type}' evaluator"
@@ -137,14 +142,27 @@ class QuestionRouter:
                 )
             
             else:
-                # Unknown evaluator type, fallback to deterministic
-                logger.warning(f"Unknown evaluator type '{evaluator_type}', using deterministic")
-                result = self.deterministic_evaluator._evaluate_exact_match(
-                    student_answer=student_answer,
-                    correct_answer=expected_answer or str(correct_answer) or "",
-                    max_score=max_score
-                )
-                return (*result, None)
+                # Unknown evaluator type, try LLM if available, otherwise fallback to deterministic
+                if self.llm_evaluator:
+                    logger.warning(f"Unknown evaluator type '{evaluator_type}', using LLM evaluator")
+                    expected_answer = expected_answer or str(correct_answer) if correct_answer else ""
+                    return await self.llm_evaluator.evaluate(
+                        student_answer=student_answer,
+                        expected_answer=expected_answer,
+                        question_text=question_text or "",
+                        metadata=metadata,
+                        max_score=max_score,
+                        concept_tags=concept_tags,
+                        solution_steps=solution_steps
+                    )
+                else:
+                    logger.warning(f"Unknown evaluator type '{evaluator_type}' and LLM not available, using deterministic")
+                    result = self.deterministic_evaluator._evaluate_exact_match(
+                        student_answer=student_answer,
+                        correct_answer=expected_answer or str(correct_answer) or "",
+                        max_score=max_score
+                    )
+                    return (*result, None)
                 
         except Exception as e:
             logger.error(f"Error in question routing: {e}", exc_info=True)

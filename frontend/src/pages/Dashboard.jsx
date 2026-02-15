@@ -312,6 +312,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                     <QuizPlayer
                       testId={selectedTest.id}
                       readOnly={true}
+                      isAdmin={isAdmin}
                     />
                   </div>
                 ) : (
@@ -586,6 +587,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                     <QuizPlayer
                       testId={selectedTest.id}
                       readOnly={selectedTest.status === 'completed'}
+                      isAdmin={isAdmin}
                       onComplete={(result) => {
                         setSelectedTest(null)
                         showNotification(`Test completed! Score: ${result.percentage.toFixed(1)}%`, 'success')
@@ -871,6 +873,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                   <QuizPlayer
                     testId={selectedTest.id}
                     readOnly={true}
+                    isAdmin={isAdmin}
                   />
                 </div>
               ) : (

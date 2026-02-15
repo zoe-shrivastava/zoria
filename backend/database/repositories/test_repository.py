@@ -568,7 +568,15 @@ class TestRepository:
             if method_detected:
                 metadata['method_detected'] = method_detected
             if detailed_feedback:
-                metadata['detailed_feedback'] = detailed_feedback
+                # Ensure detailed_feedback is stored as a string
+                if isinstance(detailed_feedback, dict):
+                    # If it's a dict, convert to JSON string
+                    metadata['detailed_feedback'] = json.dumps(detailed_feedback)
+                elif isinstance(detailed_feedback, str):
+                    metadata['detailed_feedback'] = detailed_feedback
+                else:
+                    # Convert other types to string
+                    metadata['detailed_feedback'] = str(detailed_feedback)
             
             metadata_json = json.dumps(metadata) if metadata else None
             
