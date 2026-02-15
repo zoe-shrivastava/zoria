@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+from schemas.evaluation import BehavioralPayload
+
 
 class TestGenerateRequest(BaseModel):
     """Request to generate a test."""
@@ -70,6 +72,10 @@ class TestAnswerRequest(BaseModel):
     question_id: str
     answer: str
     time_spent_seconds: Optional[int] = None
+    behavioral_data: Optional[BehavioralPayload] = Field(
+        None,
+        description="Behavioral tracking data (latency, edits, hints, confidence)"
+    )
 
 
 class TestSubmitResponse(BaseModel):

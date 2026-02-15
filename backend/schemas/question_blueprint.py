@@ -99,9 +99,9 @@ class GeneratedQuestionBlueprint(BaseModel):
     if question_type == 'multiple_choice':
       if not v or len(v) == 0:
         raise ValueError("Options are required for multiple_choice questions")
-      labels = [opt.label for opt in v]
-      if len(labels) != len(set(labels)):
-        raise ValueError("Option labels must be unique")
+    labels = [opt.label for opt in v]
+    if len(labels) != len(set(labels)):
+      raise ValueError("Option labels must be unique")
       if len(v) != 4:
         raise ValueError("Multiple choice questions must have exactly 4 options")
     return v

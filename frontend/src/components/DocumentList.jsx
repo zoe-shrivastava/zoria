@@ -13,12 +13,37 @@ export default function DocumentList({ childId, isChild = false, userRole = null
   const [showMarkdownModal, setShowMarkdownModal] = useState(false)
   const [showConceptsModal, setShowConceptsModal] = useState(false)
   const [selectedDocumentData, setSelectedDocumentData] = useState(null)
+  const [childrenMap, setChildrenMap] = useState({}) // Map child_id to child name
 
   useEffect(() => {
     if (childId || isChild || userRole === 'admin') {
       loadDocuments()
     }
   }, [childId, isChild, userRole, refreshKey])
+
+  // Load children data for admin users to show child names
+  useEffect(() => {
+    if (userRole === 'admin') {
+      loadChildren()
+    }
+  }, [userRole])
+
+  const loadChildren = async () => {
+    try {
+      const { admin } = await import('../services/api')
+      const childrenData = await admin.listChildren()
+      const childrenArray = Array.isArray(childrenData) ? childrenData : []
+      // Create a map from child_id to child name
+      const map = {}
+      childrenArray.forEach(child => {
+        map[child.id] = child.name
+      })
+      setChildrenMap(map)
+    } catch (error) {
+      console.error('Failed to load children:', error)
+      // Don't show error notification for this, just log it
+    }
+  }
 
   // Poll for status updates if any documents are processing
   useEffect(() => {
@@ -225,6 +250,10 @@ export default function DocumentList({ childId, isChild = false, userRole = null
     }
   }
 
+  const getChildName = (childId) => {
+    return childrenMap[childId] || childId.substring(0, 8) + '...'
+  }
+
   if (loading) {
     return <p className="loading-text">Loading documents...</p>
   }
@@ -286,10 +315,71 @@ export default function DocumentList({ childId, isChild = false, userRole = null
               <div style={{ fontWeight: 500, marginBottom: '0.25rem', wordBreak: 'break-word' }}>
                 {doc.filename || 'Untitled Document'}
               </div>
-              <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.25rem' }}>
+              <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.25rem', flexWrap: 'wrap' }}>
                 <span>Uploaded: {formatDate(doc.uploaded_at)}</span>
                 {doc.status && getStatusBadge(doc.status)}
               </div>
+              {/* Show linked children for admin users */}
+              {userRole === 'admin' && (() => {
+                // Get child IDs from either child_ids array or legacy child_id field
+                const childIds = doc.child_ids && doc.child_ids.length > 0 
+                  ? doc.child_ids 
+                  : (doc.child_id ? [doc.child_id] : [])
+                
+                if (childIds.length === 0) {
+                  return (
+                    <div style={{ 
+                      fontSize: '0.875rem', 
+                      color: 'var(--text-muted)', 
+                      marginTop: '0.5rem',
+                      fontStyle: 'italic'
+                    }}>
+                      Not linked to any child
+                    </div>
+                  )
+                }
+                
+                return (
+                  <div style={{ 
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    background: 'var(--bg-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-color)'
+                  }}>
+                    <div style={{ 
+                      fontSize: '0.875rem', 
+                      fontWeight: '600',
+                      marginBottom: '0.25rem',
+                      color: 'var(--text-primary)'
+                    }}>
+                      Linked to {childIds.length === 1 ? 'Child' : 'Children'}:
+                    </div>
+                    <div style={{ 
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '0.5rem'
+                    }}>
+                      {childIds.map((childId) => (
+                        <span
+                          key={childId}
+                          style={{
+                            display: 'inline-block',
+                            padding: '0.25rem 0.5rem',
+                            background: 'var(--accent-light)',
+                            color: 'var(--accent)',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.875rem',
+                            fontWeight: '500'
+                          }}
+                        >
+                          {getChildName(childId)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               {(() => {

@@ -298,13 +298,18 @@ async def get_document_knowledge_graph(
                 concept_uuids
             )
         
-        # Get questions for concepts
+        # Get questions for concepts - ONLY from this document
+        # Questions now store document_id in metadata, so we can filter by that.
+        # For backward compatibility: if document_id is NULL in metadata, only show questions
+        # if the concept was originally created for this document (c.document_id = $2).
         questions = []
         if concept_ids:
             concept_uuids = [uuid_module.UUID(cid) for cid in concept_ids]
+            document_uuid = uuid_module.UUID(document_id)
+            document_id_str = str(document_id)
             questions = await db.fetch(
                 """
-                SELECT 
+                SELECT DISTINCT
                     q.id,
                     q.concept_id,
                     q.text,
@@ -313,10 +318,18 @@ async def get_document_knowledge_graph(
                     c.name as concept_name
                 FROM questions q
                 JOIN concepts c ON q.concept_id = c.id
+                LEFT JOIN document_concepts dc ON c.id = dc.concept_id
                 WHERE q.concept_id = ANY($1::uuid[])
+                  AND (
+                    -- New questions: check metadata->>'document_id'
+                    q.metadata->>'document_id' = $3
+                    OR
+                    -- Old questions (backward compatibility): only if concept was created for this document
+                    (q.metadata->>'document_id' IS NULL AND c.document_id = $2)
+                  )
                 ORDER BY c.name, q.difficulty
                 """,
-                concept_uuids
+                concept_uuids, document_uuid, document_id_str
             )
         
         # Get skills linked to questions

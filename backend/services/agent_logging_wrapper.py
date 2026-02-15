@@ -142,19 +142,19 @@ async def run_agent_with_logging(
         if logging_service:
             try:
                 await logging_service.log_llm_call(
-                    call_type="agent_sdk",
-                    provider="openai",
-                    model=model_name,
-                    request_type="agent_run",
-                    user_prompt=user_prompt,
-                    success=False,
-                    error_message=str(e),
-                    latency_ms=latency_ms,
-                    context_source=context_source,
-                    document_id=document_id,
-                    concept_id=concept_id,
-                    test_id=test_id,
-                    metadata=metadata
+                call_type="agent_sdk",
+                provider="openai",
+                model=model_name,
+                request_type="agent_run",
+                user_prompt=user_prompt,
+                success=False,
+                error_message=str(e),
+                latency_ms=latency_ms,
+                context_source=context_source,
+                document_id=document_id,
+                concept_id=concept_id,
+                test_id=test_id,
+                metadata=metadata
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log agent error: {log_error}", exc_info=True)

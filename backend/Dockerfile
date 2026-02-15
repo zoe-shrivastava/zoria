@@ -34,4 +34,4 @@ EXPOSE 8000
 ENV PYTHONPATH=/app
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

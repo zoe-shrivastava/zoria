@@ -2,10 +2,13 @@
 
 import uuid
 import json
+import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from core.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 def json_serialize(obj):
@@ -447,7 +450,8 @@ class TestRepository:
         test_id: str,
         question_id: str,
         answer: str,
-        time_spent_seconds: Optional[int] = None
+        time_spent_seconds: Optional[int] = None,
+        behavioral_data: Optional[Dict[str, Any]] = None
     ) -> str:
         """Save or update a test response.
         
@@ -456,21 +460,47 @@ class TestRepository:
             question_id: Question UUID
             answer: Student answer
             time_spent_seconds: Time spent on question (optional)
+            behavioral_data: Behavioral tracking data (optional)
             
         Returns:
             Response ID
         """
+        import json
         response_id = str(uuid.uuid4())
-        await self.db.execute(
-            """
-            INSERT INTO test_responses 
-            (id, test_id, question_id, answer, time_spent_seconds, submitted_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (test_id, question_id) DO UPDATE
-            SET answer = $4, time_spent_seconds = $5, submitted_at = $6
-            """,
-            response_id, test_id, question_id, answer, time_spent_seconds, datetime.utcnow()
-        )
+        
+        # Store behavioral data in metadata JSONB field if available
+        behavioral_json = json.dumps(behavioral_data) if behavioral_data else None
+        
+        # Check if metadata column exists, if not, insert without it
+        try:
+            # Try to insert with metadata column
+            await self.db.execute(
+                """
+                INSERT INTO test_responses 
+                (id, test_id, question_id, answer, time_spent_seconds, submitted_at, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                ON CONFLICT (test_id, question_id) DO UPDATE
+                SET answer = $4, time_spent_seconds = $5, submitted_at = $6, metadata = $7::jsonb
+                """,
+                response_id, test_id, question_id, answer, time_spent_seconds, datetime.utcnow(), behavioral_json
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            # If metadata column doesn't exist, insert without it
+            if "metadata" in error_str and ("does not exist" in error_str or "column" in error_str):
+                logger.warning(f"Metadata column not found in test_responses, inserting without behavioral data. Run migration 016 to enable behavioral tracking.")
+                await self.db.execute(
+                    """
+                    INSERT INTO test_responses 
+                    (id, test_id, question_id, answer, time_spent_seconds, submitted_at)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (test_id, question_id) DO UPDATE
+                    SET answer = $4, time_spent_seconds = $5, submitted_at = $6
+                    """,
+                    response_id, test_id, question_id, answer, time_spent_seconds, datetime.utcnow()
+                )
+            else:
+                raise
         return response_id
     
     async def update_response_score(
@@ -478,7 +508,10 @@ class TestRepository:
         test_id: str,
         question_id: str,
         score: float,
-        is_correct: bool
+        is_correct: bool,
+        error_type: Optional[str] = None,
+        misconception: Optional[str] = None,
+        method_detected: Optional[str] = None
     ) -> None:
         """Update the score for a response.
         
@@ -487,15 +520,66 @@ class TestRepository:
             question_id: Question UUID
             score: Score for this answer
             is_correct: Whether answer is correct
+            error_type: Type of error if incorrect
+            misconception: Description of misconception if applicable
+            method_detected: Evaluation method used
         """
-        await self.db.execute(
-            """
-            UPDATE test_responses
-            SET score = $1, is_correct = $2
-            WHERE test_id = $3 AND question_id = $4
-            """,
-            score, is_correct, test_id, question_id
-        )
+        # Try to update with metadata, fallback if column doesn't exist
+        try:
+            # Update metadata with evaluation results
+            existing_metadata = await self.db.fetchval(
+                """
+                SELECT metadata FROM test_responses
+                WHERE test_id = $1 AND question_id = $2
+                """,
+                test_id, question_id
+            )
+            
+            # Parse existing metadata or create new dict
+            if existing_metadata:
+                if isinstance(existing_metadata, str):
+                    try:
+                        metadata = json.loads(existing_metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        metadata = {}
+                else:
+                    metadata = existing_metadata.copy() if existing_metadata else {}
+            else:
+                metadata = {}
+            
+            # Add evaluation results to metadata
+            if error_type:
+                metadata['error_type'] = error_type
+            if misconception:
+                metadata['misconception'] = misconception
+            if method_detected:
+                metadata['method_detected'] = method_detected
+            
+            metadata_json = json.dumps(metadata) if metadata else None
+            
+            await self.db.execute(
+                """
+                UPDATE test_responses
+                SET score = $1, is_correct = $2, metadata = $3::jsonb
+                WHERE test_id = $4 AND question_id = $5
+                """,
+                score, is_correct, metadata_json, test_id, question_id
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            # If metadata column doesn't exist, update without it
+            if "metadata" in error_str and ("does not exist" in error_str or "column" in error_str):
+                logger.warning(f"Metadata column not found in test_responses, updating without evaluation metadata. Run migration 016 to enable full tracking.")
+                await self.db.execute(
+                    """
+                    UPDATE test_responses
+                    SET score = $1, is_correct = $2
+                    WHERE test_id = $3 AND question_id = $4
+                    """,
+                    score, is_correct, test_id, question_id
+                )
+            else:
+                raise
     
     async def calculate_test_score(self, test_id: str) -> Dict[str, Any]:
         """Calculate total score for a test.

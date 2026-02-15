@@ -80,6 +80,9 @@ class ConceptRepository:
     async def get_concepts_by_document(self, document_id: str) -> List[dict]:
         """Get all concepts for a document.
         
+        Uses both direct document_id link and document_concepts junction table
+        to handle both new concepts and deduplicated existing concepts.
+        
         Args:
             document_id: Document UUID
             
@@ -87,7 +90,13 @@ class ConceptRepository:
             List of concept records
         """
         return await self.db.fetch(
-            "SELECT * FROM concepts WHERE document_id = $1 ORDER BY created_at",
+            """
+            SELECT DISTINCT c.* 
+            FROM concepts c
+            LEFT JOIN document_concepts dc ON c.id = dc.concept_id
+            WHERE c.document_id = $1 OR dc.document_id = $1
+            ORDER BY c.created_at
+            """,
             document_id
         )
     

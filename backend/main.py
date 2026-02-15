@@ -16,12 +16,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress uvicorn access logs - only show explicit application logging
+# This ensures access logs are suppressed regardless of how uvicorn is started
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").disabled = True
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown."""
     # Startup
     logger.info("Starting Zoria backend...")
+    
+    # Suppress uvicorn access logs - must be done after uvicorn initializes logging
+    # This ensures access logs are suppressed regardless of command-line flags
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    uvicorn_access_logger.setLevel(logging.WARNING)
+    uvicorn_access_logger.disabled = True
+    # Clear handlers to prevent any access log output
+    uvicorn_access_logger.handlers = []
+    uvicorn_access_logger.propagate = False
     
     # Validate settings
     try:
@@ -78,26 +92,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request logging middleware
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all incoming requests for debugging."""
-    import time
-    start_time = time.time()
-    
-    # Log request
-    logger.info(f"→ {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
-    
-    # Process request
-    try:
-        response = await call_next(request)
-        process_time = time.time() - start_time
-        logger.info(f"← {request.method} {request.url.path} - {response.status_code} ({process_time:.3f}s)")
-        return response
-    except Exception as e:
-        process_time = time.time() - start_time
-        logger.error(f"✗ {request.method} {request.url.path} - ERROR after {process_time:.3f}s: {str(e)}", exc_info=True)
-        raise
+# Request logging middleware - DISABLED to reduce log noise
+# Only explicit logger calls in code will be shown
+# @app.middleware("http")
+# async def log_requests(request: Request, call_next):
+#     """Log all incoming requests for debugging."""
+#     import time
+#     start_time = time.time()
+#     
+#     # Log request
+#     logger.info(f"→ {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
+#     
+#     # Process request
+#     try:
+#         response = await call_next(request)
+#         process_time = time.time() - start_time
+#         logger.info(f"← {request.method} {request.url.path} - {response.status_code} ({process_time:.3f}s)")
+#         return response
+#     except Exception as e:
+#         process_time = time.time() - start_time
+#         logger.error(f"✗ {request.method} {request.url.path} - ERROR after {process_time:.3f}s: {str(e)}", exc_info=True)
+#         raise
 
 
 @app.get("/")
@@ -148,5 +163,6 @@ if __name__ == "__main__":
         "main:app",
         host=settings.API_HOST,
         port=settings.API_PORT,
-        reload=settings.DEBUG
+        reload=settings.DEBUG,
+        access_log=False  # Disable access logs to reduce noise, keep debug logs visible
     )

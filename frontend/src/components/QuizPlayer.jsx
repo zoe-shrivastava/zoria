@@ -5,6 +5,8 @@ import LoadingSpinner from './LoadingSpinner'
 import MathText from './MathText'
 import GraphDrawingCanvas from './GraphDrawingCanvas'
 import DiagramDrawingCanvas from './DiagramDrawingCanvas'
+import MatchingQuestionWidget from './MatchingQuestionWidget'
+import FillInBlankWidget from './FillInBlankWidget'
 
 export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
   const [test, setTest] = useState(null)
@@ -20,6 +22,10 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
   const [showHints, setShowHints] = useState({}) // { questionId: bool }
   // State to track if graphs/diagrams are currently rendering
   const [isGraphRendering, setIsGraphRendering] = useState(false)
+  
+  // Behavioral tracking state per question
+  const [behavioralData, setBehavioralData] = useState({}) // { questionId: { edit_count, hints_accessed, latency_ms, idle_time_ms, confidence_score, question_start_time, last_activity_time } }
+  const [confidenceScores, setConfidenceScores] = useState({}) // { questionId: 1-5 }
 
   useEffect(() => {
     loadTest()
@@ -89,6 +95,95 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
       observer.disconnect()
     }
   }, [currentQuestionIndex]) // Re-run when question changes
+
+  // Initialize canvas visibility and behavioral tracking when question changes
+  // This must be before any early returns to follow React hooks rules
+  useEffect(() => {
+    if (test && test.questions && test.questions.length > 0) {
+      const questions = test.questions || []
+      const currentQuestion = questions[currentQuestionIndex]
+      if (currentQuestion && currentQuestion.question_id) {
+        const questionId = currentQuestion.question_id
+        const needsGraph = currentQuestion.metadata?.needs_graph === true
+        const needsDiagram = currentQuestion.metadata?.needs_diagram === true
+        
+        setCanvasVisibility(prev => ({
+          ...prev,
+          [questionId]: {
+            showGraph: needsGraph || (prev[questionId]?.showGraph ?? false),
+            showDiagram: needsDiagram || (prev[questionId]?.showDiagram ?? false)
+          }
+        }))
+        
+        // Initialize behavioral tracking for this question if not already started
+        // Only initialize if test is active and not read-only
+        if (!readOnly && started && !behavioralData[questionId]) {
+          const now = Date.now()
+          setBehavioralData(prev => ({
+            ...prev,
+            [questionId]: {
+              edit_count: 0,
+              hints_accessed: 0,
+              latency_ms: null, // Will be set when first answer is provided
+              idle_time_ms: 0,
+              question_start_time: now,
+              last_activity_time: now,
+              confidence_score: null
+            }
+          }))
+        } else if (!readOnly && started && behavioralData[questionId]) {
+          // Update last activity time when switching to this question
+          setBehavioralData(prev => ({
+            ...prev,
+            [questionId]: {
+              ...prev[questionId],
+              last_activity_time: Date.now()
+            }
+          }))
+        }
+      }
+    }
+  }, [test, currentQuestionIndex, readOnly, started])
+  
+  // Track idle time (time spent not typing/editing)
+  useEffect(() => {
+    if (readOnly || !started) return
+    
+    const questions = test?.questions || []
+    const currentQuestion = questions[currentQuestionIndex]
+    if (!currentQuestion) return
+    
+    const questionId = currentQuestion.question_id
+    
+    let lastCheckTime = Date.now()
+    
+    const idleCheckInterval = setInterval(() => {
+      setBehavioralData(prev => {
+        const behavioral = prev[questionId]
+        if (!behavioral) return prev
+        
+        const now = Date.now()
+        const lastActivity = behavioral.last_activity_time || behavioral.question_start_time
+        const timeSinceLastActivity = now - lastActivity
+        
+        // Update idle time if user hasn't been active for more than 1 second
+        if (timeSinceLastActivity > 1000) {
+          const elapsed = now - lastCheckTime
+          return {
+            ...prev,
+            [questionId]: {
+              ...behavioral,
+              idle_time_ms: (behavioral.idle_time_ms || 0) + elapsed
+            }
+          }
+        }
+        return prev
+      })
+      lastCheckTime = Date.now()
+    }, 1000) // Check every second
+    
+    return () => clearInterval(idleCheckInterval)
+  }, [test, currentQuestionIndex, readOnly, started])
 
   const loadTest = async () => {
     try {
@@ -249,25 +344,82 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
   }
 
   const handleAnswerChange = async (questionId, answer) => {
+    const previousAnswer = answers[questionId]
+    const isNewAnswer = previousAnswer !== answer
     const newAnswers = { ...answers, [questionId]: answer }
     setAnswers(newAnswers)
 
-    // Auto-save answer
+    // Update behavioral tracking
+    if (!readOnly && started) {
+      const now = Date.now()
+      const behavioral = behavioralData[questionId] || {}
+      const questionStartTime = behavioral.question_start_time || now
+      
+      // Track edit count (increment if answer changed)
+      if (isNewAnswer && previousAnswer !== undefined) {
+        setBehavioralData(prev => ({
+          ...prev,
+          [questionId]: {
+            ...(prev[questionId] || {}),
+            edit_count: (prev[questionId]?.edit_count || 0) + 1,
+            last_activity_time: now
+          }
+        }))
+      }
+      
+      // Track latency (time from question load to first answer)
+      if (previousAnswer === undefined && answer) {
+        const latency = now - questionStartTime
+        setBehavioralData(prev => ({
+          ...prev,
+          [questionId]: {
+            ...(prev[questionId] || {}),
+            latency_ms: latency,
+            last_activity_time: now
+          }
+        }))
+      } else {
+        // Update last activity time
+        setBehavioralData(prev => ({
+          ...prev,
+          [questionId]: {
+            ...(prev[questionId] || {}),
+            last_activity_time: now
+          }
+        }))
+      }
+    }
+
+    // Auto-save answer with behavioral data
     if (!readOnly && started) {
       try {
         // Ensure answer is a string (required by API)
         const answerString = typeof answer === 'string' ? answer : JSON.stringify(answer)
-        console.log('Saving answer:', {
+        
+        // Prepare behavioral data for this question
+        const behavioral = behavioralData[questionId] || {}
+        const confidence = confidenceScores[questionId] || behavioral.confidence_score
+        
+        const behavioralPayload = {
+          latency_ms: behavioral.latency_ms || null,
+          idle_time_ms: behavioral.idle_time_ms || 0,
+          edit_count: behavioral.edit_count || 0,
+          hints_accessed: behavioral.hints_accessed || 0,
+          confidence_score: confidence || null
+        }
+        
+        console.log('Saving answer with behavioral data:', {
           questionId,
           answerType: typeof answer,
           answerStringLength: answerString.length,
-          answerPreview: answerString.substring(0, 200)
+          behavioralData: behavioralPayload
         })
-        await tests.answer(testId, questionId, answerString)
+        
+        await tests.answer(testId, questionId, answerString, null, behavioralPayload)
         console.log('✅ Answer saved successfully:', { 
           questionId, 
           answerLength: answerString.length,
-          answerPreview: answerString.substring(0, 200)
+          behavioralData: behavioralPayload
         })
       } catch (error) {
         console.error('❌ Failed to save answer:', error)
@@ -410,7 +562,14 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
     return <div>No questions found</div>
   }
 
-  const isMCQ = currentQuestion.type === 'multiple_choice'
+  const questionType = currentQuestion.type || 'short_answer'
+  const isMCQ = questionType === 'multiple_choice'
+  const isMatching = questionType === 'matching'
+  const isFillInBlank = questionType === 'fill_in_the_blank'
+  const isProblemSolving = questionType === 'problem_solving'
+  const isShortAnswer = questionType === 'short_answer'
+  const isConceptual = questionType === 'conceptual_question'
+  
   const options = currentQuestion.metadata?.options || []
   const isCompleted = test.status === 'completed'
   const questionId = currentQuestion.question_id
@@ -450,22 +609,6 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
     showDiagram: needsDiagram || false
   }
   
-  // Initialize canvas visibility based on needs flags when question changes
-  useEffect(() => {
-    if (currentQuestion && questionId) {
-      const needsGraph = currentQuestion.metadata?.needs_graph === true
-      const needsDiagram = currentQuestion.metadata?.needs_diagram === true
-      
-      setCanvasVisibility(prev => ({
-        ...prev,
-        [questionId]: {
-          showGraph: needsGraph || (prev[questionId]?.showGraph ?? false),
-          showDiagram: needsDiagram || (prev[questionId]?.showDiagram ?? false)
-        }
-      }))
-    }
-  }, [questionId, currentQuestion])
-  
   // Toggle canvas visibility
   const toggleCanvas = (canvasType) => {
     setCanvasVisibility(prev => ({
@@ -479,32 +622,78 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
 
   // Toggle hint visibility
   const toggleHint = () => {
+    const wasHidden = !showHints[questionId]
     setShowHints(prev => ({
       ...prev,
       [questionId]: !prev[questionId]
+    }))
+    
+    // Track hint access (only count when showing hint, not hiding)
+    if (wasHidden) {
+      setBehavioralData(prev => ({
+        ...prev,
+        [questionId]: {
+          ...(prev[questionId] || {}),
+          hints_accessed: (prev[questionId]?.hints_accessed || 0) + 1
+        }
+      }))
+    }
+  }
+  
+  // Update confidence score
+  const handleConfidenceChange = (questionId, score) => {
+    setConfidenceScores(prev => ({
+      ...prev,
+      [questionId]: score
+    }))
+    setBehavioralData(prev => ({
+      ...prev,
+      [questionId]: {
+        ...(prev[questionId] || {}),
+        confidence_score: score
+      }
     }))
   }
 
   // Get hint for current question
   // Check multiple possible locations: metadata.hint, metadata.blueprint.hint, or direct hint field
+  // Also check if metadata.hint is the fallback message and prefer blueprint.hint if available
   let hint = null
+  const fallbackHints = [
+    "Review the key concepts related to this question.",
+    "Consider each option carefully and identify the key concept being tested.",
+    "Think about the key formula or concept needed to solve this problem.",
+    "Break down the problem into steps and identify what information you need."
+  ]
+  
   if (currentQuestion.metadata) {
     // First check metadata.hint directly (stored when question was created)
-    hint = currentQuestion.metadata.hint
+    const metadataHint = currentQuestion.metadata.hint
+    const isFallbackHint = metadataHint && fallbackHints.includes(metadataHint.trim())
     
-    // If not found, check metadata.blueprint.hint (blueprint is the full question blueprint)
-    if (!hint && currentQuestion.metadata.blueprint) {
+    // Check metadata.blueprint.hint (blueprint is the full question blueprint)
+    let blueprintHint = null
+    if (currentQuestion.metadata.blueprint) {
       if (typeof currentQuestion.metadata.blueprint === 'object') {
         // Check blueprint.hint directly - this is where it should be according to the schema
-        hint = currentQuestion.metadata.blueprint.hint
+        blueprintHint = currentQuestion.metadata.blueprint.hint
       } else if (typeof currentQuestion.metadata.blueprint === 'string') {
         try {
           const blueprint = JSON.parse(currentQuestion.metadata.blueprint)
-          hint = blueprint.hint
+          blueprintHint = blueprint.hint
         } catch (e) {
           // Ignore parse errors
         }
       }
+    }
+    
+    // Prefer blueprint hint if metadata hint is a fallback, otherwise use metadata hint
+    if (isFallbackHint && blueprintHint && blueprintHint.trim() && !fallbackHints.includes(blueprintHint.trim())) {
+      hint = blueprintHint
+    } else if (metadataHint && metadataHint.trim()) {
+      hint = metadataHint
+    } else if (blueprintHint && blueprintHint.trim()) {
+      hint = blueprintHint
     }
   }
   
@@ -513,17 +702,20 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
     hint = currentQuestion.hint
   }
   
-  // Debug logging - show full blueprint structure if hint not found
-  if (!hint && currentQuestion.metadata?.blueprint) {
-    const blueprint = currentQuestion.metadata.blueprint
-    console.log('No hint found for question - checking blueprint structure:', {
+  // Debug logging - show full structure to help diagnose hint location
+  if (!hint) {
+    console.log('No hint found for question - full structure:', {
       questionId,
+      hasMetadata: !!currentQuestion.metadata,
+      metadataType: typeof currentQuestion.metadata,
       metadataKeys: currentQuestion.metadata ? Object.keys(currentQuestion.metadata) : [],
       metadataHint: currentQuestion.metadata?.hint,
-      blueprintType: typeof blueprint,
-      blueprintKeys: typeof blueprint === 'object' ? Object.keys(blueprint) : [],
-      blueprintHint: typeof blueprint === 'object' ? blueprint.hint : undefined,
-      blueprintSample: typeof blueprint === 'object' ? JSON.stringify(blueprint).substring(0, 500) : blueprint?.substring(0, 500)
+      hasBlueprint: !!currentQuestion.metadata?.blueprint,
+      blueprintType: typeof currentQuestion.metadata?.blueprint,
+      blueprintKeys: (typeof currentQuestion.metadata?.blueprint === 'object' && currentQuestion.metadata?.blueprint) ? Object.keys(currentQuestion.metadata.blueprint) : [],
+      blueprintHint: (typeof currentQuestion.metadata?.blueprint === 'object' && currentQuestion.metadata?.blueprint) ? currentQuestion.metadata.blueprint.hint : undefined,
+      directHint: currentQuestion.hint,
+      fullMetadata: currentQuestion.metadata ? JSON.stringify(currentQuestion.metadata).substring(0, 1000) : null
     })
   }
 
@@ -772,28 +964,54 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
               </label>
             ))}
           </div>
+        ) : isMatching ? (
+          <MatchingQuestionWidget
+            question={currentQuestion}
+            answer={answerComponents.text}
+            onChange={(value) => handleAnswerComponentChange(questionId, 'text', value)}
+            disabled={readOnly || isCompleted || isGraphRendering}
+          />
+        ) : isFillInBlank ? (
+          <FillInBlankWidget
+            question={currentQuestion}
+            answer={answerComponents.text}
+            onChange={(value) => handleAnswerComponentChange(questionId, 'text', value)}
+            disabled={readOnly || isCompleted || isGraphRendering}
+          />
         ) : (
           <div>
-            {/* Note for non-MCQ questions */}
-            <div style={{
-              marginBottom: '0.75rem',
-              padding: '0.75rem',
-              background: 'var(--primary-color-light)',
-              border: '1px solid var(--primary-color)',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '0.95rem',
-              color: 'var(--primary-color)',
-              fontWeight: '500',
-            }}>
-              📝 Show all of your steps
-            </div>
+            {/* Note for text-based questions - customize by type */}
+            {!isGraphRendering && (
+              <div style={{
+                marginBottom: '0.75rem',
+                padding: '0.75rem',
+                background: 'var(--primary-color-light)',
+                border: '1px solid var(--primary-color)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.95rem',
+                color: 'var(--primary-color)',
+                fontWeight: '500',
+              }}>
+                {isProblemSolving ? '📝 Show all of your steps' : 
+                 isConceptual ? '💭 Explain your reasoning' :
+                 '✍️ Type your answer'}
+              </div>
+            )}
             
-            {/* Text Input - Always shown for non-MCQ */}
+            {/* Text Input - For short_answer, problem_solving, conceptual_question */}
             <textarea
               value={answerComponents.text}
               onChange={(e) => handleAnswerComponentChange(questionId, 'text', e.target.value)}
               disabled={readOnly || isCompleted || isGraphRendering}
-              placeholder={isGraphRendering ? 'Please wait for diagrams to finish rendering...' : 'Type your answer here...'}
+              placeholder={
+                isGraphRendering 
+                  ? 'Please wait for diagrams to finish rendering...' 
+                  : isProblemSolving 
+                    ? 'Show your work and calculations...'
+                    : isConceptual
+                      ? 'Explain your reasoning...'
+                      : 'Type your answer here...'
+              }
               style={{
                 width: '100%',
                 minHeight: '120px',
@@ -959,6 +1177,81 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
           </div>
         )}
 
+        {/* Confidence Score Input (for active tests only) */}
+        {!readOnly && !isCompleted && started && (
+          <div style={{
+            marginTop: '1.5rem',
+            padding: '1rem',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+          }}>
+            <div style={{
+              fontSize: '0.875rem',
+              fontWeight: '600',
+              marginBottom: '0.75rem',
+              color: 'var(--text-color)'
+            }}>
+              How confident are you in your answer?
+            </div>
+            <div style={{
+              display: 'flex',
+              gap: '0.5rem',
+              alignItems: 'center',
+              flexWrap: 'wrap'
+            }}>
+              {[1, 2, 3, 4, 5].map(score => {
+                const isSelected = (confidenceScores[questionId] || behavioralData[questionId]?.confidence_score) === score
+                return (
+                  <button
+                    key={score}
+                    type="button"
+                    onClick={() => handleConfidenceChange(questionId, score)}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      border: `2px solid ${isSelected ? 'var(--primary-color)' : 'var(--border-color)'}`,
+                      borderRadius: 'var(--radius-md)',
+                      background: isSelected ? 'var(--primary-color-light)' : 'transparent',
+                      color: isSelected ? 'var(--primary-color)' : 'var(--text-color)',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: isSelected ? '600' : '400',
+                      transition: 'all 0.2s',
+                      minWidth: '60px'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) {
+                        e.target.style.borderColor = 'var(--primary-color)'
+                        e.target.style.background = 'var(--primary-color-light)'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) {
+                        e.target.style.borderColor = 'var(--border-color)'
+                        e.target.style.background = 'transparent'
+                      }
+                    }}
+                  >
+                    {score === 1 && '😕 Not at all'}
+                    {score === 2 && '😐 Slightly'}
+                    {score === 3 && '😊 Somewhat'}
+                    {score === 4 && '😄 Very'}
+                    {score === 5 && '😁 Extremely'}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{
+              fontSize: '0.75rem',
+              color: 'var(--text-muted)',
+              marginTop: '0.5rem',
+              fontStyle: 'italic'
+            }}>
+              Select your confidence level (1 = not confident, 5 = very confident)
+            </div>
+          </div>
+        )}
+
         {/* Show score if completed */}
         {isCompleted && currentQuestion.score !== null && (
           <div style={{
@@ -991,13 +1284,121 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             ) : (
               <div style={{ marginBottom: '0.25rem' }}>Your answer was incorrect.</div>
             )}
-            <div>
+            <div style={{ marginBottom: '0.5rem' }}>
               <strong>Correct answer:</strong>{' '}
               {correctLabel ? `${correctLabel}) ` : ''}
               <MathText text={correctText} inline />
             </div>
           </div>
         )}
+
+        {/* Show expected answer for non-MCQ completed tests */}
+        {isCompleted && !isMCQ && (() => {
+          // Extract expected_answer from metadata or blueprint
+          let expectedAnswer = null
+          if (currentQuestion.metadata) {
+            expectedAnswer = currentQuestion.metadata.expected_answer
+            if (!expectedAnswer && currentQuestion.metadata.blueprint) {
+              if (typeof currentQuestion.metadata.blueprint === 'object') {
+                expectedAnswer = currentQuestion.metadata.blueprint.expected_answer
+              } else if (typeof currentQuestion.metadata.blueprint === 'string') {
+                try {
+                  const blueprint = JSON.parse(currentQuestion.metadata.blueprint)
+                  expectedAnswer = blueprint.expected_answer
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
+            }
+          }
+          
+          if (expectedAnswer) {
+            return (
+              <div
+                style={{
+                  marginTop: '0.75rem',
+                  padding: '0.75rem',
+                  background: 'var(--bg-secondary)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px dashed var(--border-color)',
+                  fontSize: '0.95rem',
+                  lineHeight: 1.5,
+                }}
+              >
+                <div>
+                  <strong>Expected answer:</strong>{' '}
+                  <MathText text={expectedAnswer} inline />
+                </div>
+              </div>
+            )
+          }
+          return null
+        })()}
+
+        {/* Show solution steps for completed tests */}
+        {isCompleted && (() => {
+          // Extract solution_steps from metadata or blueprint
+          let solutionSteps = null
+          if (currentQuestion.metadata) {
+            // Check metadata.solution_steps first
+            solutionSteps = currentQuestion.metadata.solution_steps
+            
+            // If not found, check metadata.blueprint.solution_steps
+            if (!solutionSteps && currentQuestion.metadata.blueprint) {
+              if (typeof currentQuestion.metadata.blueprint === 'object') {
+                solutionSteps = currentQuestion.metadata.blueprint.solution_steps
+              } else if (typeof currentQuestion.metadata.blueprint === 'string') {
+                try {
+                  const blueprint = JSON.parse(currentQuestion.metadata.blueprint)
+                  solutionSteps = blueprint.solution_steps
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
+            }
+          }
+          
+          // Only show if we have solution steps
+          if (solutionSteps && Array.isArray(solutionSteps) && solutionSteps.length > 0) {
+            return (
+              <div
+                style={{
+                  marginTop: '1rem',
+                  padding: '1rem',
+                  background: 'var(--primary-color-light)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--primary-color)',
+                  borderLeft: '4px solid var(--primary-color)',
+                }}
+              >
+                <div style={{
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  color: 'var(--primary-color)',
+                  marginBottom: '0.75rem'
+                }}>
+                  📚 Solution Steps
+                </div>
+                <ol style={{
+                  margin: 0,
+                  paddingLeft: '1.5rem',
+                  listStyleType: 'decimal',
+                }}>
+                  {solutionSteps.map((step, idx) => (
+                    <li key={idx} style={{
+                      marginBottom: '0.75rem',
+                      fontSize: '0.95rem',
+                      lineHeight: 1.6,
+                    }}>
+                      <MathText text={step} />
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )
+          }
+          return null
+        })()}
       </div>
 
       {/* Navigation */}

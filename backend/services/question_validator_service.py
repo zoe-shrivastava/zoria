@@ -44,6 +44,7 @@ class QuestionValidatorService:
     if blueprint.question_type == "multiple_choice":
       if not blueprint.options or len(blueprint.options) != 4:
         raise ValueError("MCQ must have exactly 4 options (A, B, C, D)")
+      self._validate_mcq_consistency(blueprint)
 
     # Validate hint is present and meaningful
     if not blueprint.hint or not str(blueprint.hint).strip():

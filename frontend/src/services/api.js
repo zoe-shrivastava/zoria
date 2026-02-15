@@ -390,13 +390,14 @@ export const tests = {
       method: 'POST',
     }),
 
-  answer: (testId, questionId, answer, timeSpentSeconds = null) =>
+  answer: (testId, questionId, answer, timeSpentSeconds = null, behavioralData = null) =>
     apiRequest(`/api/v1/tests/${testId}/answer`, {
       method: 'POST',
       body: JSON.stringify({
         question_id: questionId,
         answer,
         time_spent_seconds: timeSpentSeconds,
+        behavioral_data: behavioralData,
       }),
     }),
 

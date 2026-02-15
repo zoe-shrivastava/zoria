@@ -357,6 +357,12 @@ class TestGenerationService:
                                 options_text = []
                         # Preserve diagram_code from metadata if present
                         diagram_code = blueprint.metadata.get("diagram_code") or raw.get("metadata", {}).get("diagram_code")
+                        # Store blueprint dict and ensure hint is preserved
+                        blueprint_dict = blueprint.dict()
+                        # Ensure hint is in the blueprint (it should be, but double-check)
+                        if blueprint.hint and not blueprint_dict.get("hint"):
+                            blueprint_dict["hint"] = blueprint.hint
+                        
                         question_data_for_storage = {
                             "text": blueprint.question_text,
                             "type": blueprint.question_type,
@@ -366,7 +372,7 @@ class TestGenerationService:
                             "expected_answer": blueprint.expected_answer if blueprint.question_type != "multiple_choice" else None,
                             "hint": blueprint.hint,
                             "explanation": blueprint.metadata.get("explanation") or raw.get("explanation", ""),
-                            "blueprint": blueprint.dict(),
+                            "blueprint": blueprint_dict,
                         }
                         # Ensure diagram_code is preserved in blueprint metadata
                         if diagram_code:
@@ -709,11 +715,16 @@ class TestGenerationService:
         concept_ids: List[str] = []
         
         # Get all concepts for the child (from their documents)
+        # Include concepts linked via both direct document_id and document_concepts junction table
         all_concepts = await self.db.fetch(
             """
             SELECT DISTINCT c.id, c.name, c.subtopic, c.keywords, d.subject
             FROM concepts c
-            JOIN documents d ON c.document_id = d.id
+            LEFT JOIN document_concepts dc ON c.id = dc.concept_id
+            JOIN documents d ON (
+                c.document_id = d.id 
+                OR dc.document_id = d.id
+            )
             WHERE (
                 d.child_id = $1 
                 OR d.id IN (
@@ -895,6 +906,12 @@ class TestGenerationService:
                                 options_text = []
                         # Preserve diagram_code from metadata if present
                         diagram_code = blueprint.metadata.get("diagram_code") or raw.get("metadata", {}).get("diagram_code")
+                        # Store blueprint dict and ensure hint is preserved
+                        blueprint_dict = blueprint.dict()
+                        # Ensure hint is in the blueprint (it should be, but double-check)
+                        if blueprint.hint and not blueprint_dict.get("hint"):
+                            blueprint_dict["hint"] = blueprint.hint
+                        
                         question_data_for_storage = {
                             "text": blueprint.question_text,
                             "type": blueprint.question_type,
@@ -904,7 +921,7 @@ class TestGenerationService:
                             "expected_answer": blueprint.expected_answer if blueprint.question_type != "multiple_choice" else None,
                             "hint": blueprint.hint,
                             "explanation": blueprint.metadata.get("explanation") or raw.get("explanation", ""),
-                            "blueprint": blueprint.dict(),
+                            "blueprint": blueprint_dict,
                         }
                         # Ensure diagram_code is preserved in blueprint metadata
                         if diagram_code:

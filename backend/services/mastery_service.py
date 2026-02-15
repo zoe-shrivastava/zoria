@@ -1,10 +1,12 @@
 """Mastery service for tracking and updating concept mastery scores."""
 
 import logging
+import json
 from typing import Dict, Any, Optional, List
 
 from database.repositories.test_repository import TestRepository
 from core.database import Database
+from services.evaluation import ErrorLibrary, ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +56,27 @@ class MasteryService:
         # Calculate performance percentage (0-100)
         performance = (total_score / max_score) * 100.0
         
-        # Update mastery using the database function
+        # Get behavioral data and error types from responses for weighted calculation
+        responses = await self.db.fetch(
+            """
+            SELECT metadata, score, is_correct
+            FROM test_responses
+            WHERE test_id = $1
+            """,
+            test_id
+        )
+        
+        # Calculate weighted performance considering confidence and error types
+        weighted_performance = self._calculate_weighted_performance(
+            performance, responses
+        )
+        
+        # Update mastery using the database function with weighted performance
         new_mastery = await self.db.fetchval(
             """
             SELECT update_mastery_score($1, $2, $3)
             """,
-            child_id, concept_id, performance
+            child_id, concept_id, weighted_performance
         )
         
         logger.info(
@@ -186,3 +203,72 @@ class MasteryService:
         )
         
         return [dict(r) for r in results]
+    
+    def _calculate_weighted_performance(
+        self,
+        base_performance: float,
+        responses: List[Dict[str, Any]]
+    ) -> float:
+        """Calculate weighted performance considering confidence and error types.
+        
+        Args:
+            base_performance: Base performance percentage (0-100)
+            responses: List of response dictionaries with metadata
+            
+        Returns:
+            Weighted performance percentage (0-100)
+        """
+        if not responses:
+            return base_performance
+        
+        total_weight = 0.0
+        weighted_sum = 0.0
+        
+        for response in responses:
+            metadata = response.get('metadata', {})
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+            
+            is_correct = response.get('is_correct', False)
+            score = float(response.get('score', 0.0))
+            max_score = 1.0  # Default, could be retrieved from test_questions
+            
+            # Get confidence score (1-5)
+            confidence_score = metadata.get('confidence_score')
+            if confidence_score:
+                confidence_score = max(1, min(5, int(confidence_score)))
+            else:
+                confidence_score = 3  # Default to neutral
+            
+            # Get error type
+            error_type_str = metadata.get('error_type', 'None')
+            error_type = ErrorLibrary.classify_error(error_type_str)
+            
+            # Calculate weight based on confidence and correctness
+            # High confidence + wrong answer = deeper misconception (higher penalty)
+            # Low confidence + correct answer = less certain mastery (lower weight)
+            if is_correct:
+                # Correct answer: weight by confidence (higher confidence = more weight)
+                weight = confidence_score / 5.0
+            else:
+                # Wrong answer: weight by confidence (higher confidence = deeper misconception)
+                # Apply error type penalty
+                error_penalty = ErrorLibrary.get_mastery_penalty(error_type)
+                # High confidence wrong = more serious (weight it more heavily for penalty)
+                weight = (confidence_score / 5.0) * error_penalty
+            
+            # Question performance (0-1)
+            question_perf = score / max_score if max_score > 0 else 0.0
+            
+            weighted_sum += question_perf * weight * 100.0  # Convert to percentage
+            total_weight += weight
+        
+        if total_weight > 0:
+            weighted_performance = weighted_sum / total_weight
+            # Clamp to 0-100
+            return max(0.0, min(100.0, weighted_performance))
+        else:
+            return base_performance

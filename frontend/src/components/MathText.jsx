@@ -160,7 +160,6 @@ export default function MathText({ text, inline = false }) {
         
         let processedText = text || ''
         const tikzDiagrams = []
-        const currencyPlaceholders = []
 
       // Extract and process TikZ diagrams
       // Pattern 1: "Diagram (LaTeX): \begin{tikzpicture}...\end{tikzpicture}" or with escaped backslashes
@@ -226,43 +225,15 @@ export default function MathText({ text, inline = false }) {
       
       console.log('MathText: Total TikZ diagrams extracted:', tikzDiagrams.length)
 
-      // Extract ALL $...$ patterns first, classify them, then process
-      const allDollarExpressions = []
-      // More restrictive regex: don't match across word boundaries unless it contains LaTeX indicators
-      // This prevents matching "$5 and $2" as a single expression
-      const dollarPattern = /\$[^$\n]+?\$/g
-      let dollarIndex = 0
-      
-      // Helper function to check if a $...$ expression is LaTeX (not currency)
-      // Prioritizes currency detection first
-      const isLaTeXExpression = (match) => {
-        const content = match.slice(1, -1).trim() // Remove $ delimiters and trim
-        
-        // 1. Currency Rule: If it's just a number (e.g., $5, $10.50), it's NOT LaTeX
-        if (/^\d+(\.\d{1,2})?$/.test(content)) return false
-        
-        // 2. Short Variable Rule: If it's just a single letter (e.g., $x$, $n$), it IS LaTeX
-        if (content.length === 1 && /[a-zA-Z]/.test(content)) return true
-        
-        // 3. Command/Operator Rule: Contains LaTeX commands, operators, subscripts, brackets
-        if (/\\[a-zA-Z]|\\\\[a-zA-Z]|[_^]|[\(\)\{\}]|[=+\-*/<>]/.test(content)) return true
-        
-        // 4. Mixed Content: If it contains spaces, check if it's a false positive
-        if (/\s/.test(content)) {
-          // If the content is long and contains a lot of normal text, it's a False Positive
-          const wordCount = content.split(/\s+/).length
-          if (wordCount > 3) return false
-          // Otherwise, if it has spaces but also has LaTeX features, it's LaTeX
-          return true
-        }
-        
-        // 5. If it's longer than 3 chars and contains both letters and numbers, likely LaTeX
-        if (content.length > 3 && /\d/.test(content) && /[a-zA-Z]/.test(content)) {
-          return true
-        }
-        
-        // Default: treat as currency (simple patterns like $X$ where X is not a single letter)
-        return false
+      // Normalize over-escaped backslashes in LaTeX expressions
+      // Handles cases where backslashes were double-escaped during storage/transmission
+      // e.g., \\\\text{m/s} -> \\text{m/s} (which will render correctly as \text{m/s})
+      const normalizeLaTeXEscaping = (latexText) => {
+        // Replace 4+ consecutive backslashes with 2 backslashes
+        // This handles double-escaping that can occur in JSON serialization
+        // Pattern: \\\\ (4 backslashes) or more -> \\ (2 backslashes)
+        // Match 4 or more backslashes and replace with exactly 2
+        return latexText.replace(/(\\\\){2,}/g, '\\\\')
       }
       
       // Extract display math patterns first ($$...$$, \[...\], \(...\))
@@ -273,45 +244,36 @@ export default function MathText({ text, inline = false }) {
       ]
       
       let protectedText = processedText
+      const allDollarExpressions = []
+      let dollarIndex = 0
       
-      // First, extract display math (always LaTeX)
+      // First, extract display math (always LaTeX) and normalize
       displayPatterns.forEach(pattern => {
         protectedText = protectedText.replace(pattern, (match) => {
+          // Normalize over-escaped backslashes in display math
+          const normalized = normalizeLaTeXEscaping(match)
           const placeholder = `__LATEX_${dollarIndex}__`
-          allDollarExpressions.push({ placeholder, original: match, isLaTeX: true })
+          allDollarExpressions.push({ placeholder, original: normalized })
           dollarIndex++
           return placeholder
         })
       })
       
-      // Then, extract all inline $...$ patterns and classify them
+      // Then, extract all inline $...$ patterns and normalize
+      const dollarPattern = /\$[^$\n]+?\$/g
       protectedText = protectedText.replace(dollarPattern, (match) => {
-        const isLaTeX = isLaTeXExpression(match)
+        // Normalize over-escaped backslashes for LaTeX expressions
+        const normalized = normalizeLaTeXEscaping(match)
         const placeholder = `__DOLLAR_${dollarIndex}__`
-        allDollarExpressions.push({ placeholder, original: match, isLaTeX })
+        allDollarExpressions.push({ placeholder, original: normalized })
         dollarIndex++
         return placeholder
       })
       
-      // Now process currency escaping only on non-LaTeX dollar expressions
-      // Restore expressions: LaTeX as-is, currency as escaped
+      // Restore all expressions (LLM handles currency formatting correctly)
       let finalText = protectedText
-      allDollarExpressions.forEach(({ placeholder, original, isLaTeX }) => {
-        if (isLaTeX) {
-          // Restore LaTeX expression as-is
-          finalText = finalText.replace(placeholder, original)
-        } else {
-          // This is currency - escape the dollar signs to prevent KaTeX from processing
-          // Replace $X$ with \$X\$ (escaped dollar signs)
-          const escapedCurrency = original.replace(/\$/g, '\\$')
-          const currencyPlaceholder = `__CURRENCY_${currencyPlaceholders.length}__`
-          currencyPlaceholders.push({ 
-            placeholder: currencyPlaceholder, 
-            original: original,
-            escaped: escapedCurrency 
-          })
-          finalText = finalText.replace(placeholder, currencyPlaceholder)
-        }
+      allDollarExpressions.forEach(({ placeholder, original }) => {
+        finalText = finalText.replace(placeholder, original)
       })
 
       // Set raw HTML so KaTeX auto-render can see delimiters like $...$, $$...$$, \\(...\\), \\[...\\]
@@ -591,7 +553,7 @@ export default function MathText({ text, inline = false }) {
         isRenderingRef.current = false
       }
 
-      // Render LaTeX math with KaTeX
+          // Render LaTeX math with KaTeX
       if (typeof window !== 'undefined' && window.renderMathInElement) {
         try {
           window.renderMathInElement(el, {
@@ -602,28 +564,6 @@ export default function MathText({ text, inline = false }) {
               { left: '\\(', right: '\\)', display: false },
             ],
             throwOnError: false,
-          })
-          
-          // Restore currency placeholders back to escaped dollar signs after KaTeX processing
-          // Do this after KaTeX has processed LaTeX delimiters
-          currencyPlaceholders.forEach(({ placeholder, escaped }) => {
-            if (escaped) {
-              // Find text nodes containing the placeholder
-              const walker = document.createTreeWalker(
-                el,
-                NodeFilter.SHOW_TEXT,
-                null,
-                false
-              )
-              
-              let node
-              while (node = walker.nextNode()) {
-                if (node.textContent && node.textContent.includes(placeholder)) {
-                  // Replace placeholder with escaped version (which will display as $)
-                  node.textContent = node.textContent.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), escaped)
-                }
-              }
-            }
           })
         } catch (e) {
           console.error('Failed to render math', e)

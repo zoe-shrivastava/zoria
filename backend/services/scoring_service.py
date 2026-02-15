@@ -9,6 +9,8 @@ from database.repositories.test_repository import TestRepository
 from database.repositories.question_repository import QuestionRepository
 from core.database import Database
 from services.graph_evaluation_service import GraphEvaluationService
+from services.evaluation import QuestionRouter, ErrorType, ErrorLibrary
+from schemas.evaluation import BehavioralPayload
 
 logger = logging.getLogger(__name__)
 
@@ -22,29 +24,33 @@ class ScoringService:
         Args:
             db: Database instance
             embedding_service: Optional embedding service for semantic similarity
-            llm_service: Optional LLM service for graph evaluation
+            llm_service: Optional LLM service for graph evaluation and LLM evaluator
         """
         self.db = db
         self.test_repo = TestRepository(db)
         self.question_repo = QuestionRepository(db)
         self.embedding_service = embedding_service
         self.graph_eval_service = GraphEvaluationService(llm_service=llm_service)
+        # Initialize question router with LLM service
+        self.question_router = QuestionRouter(llm_service=llm_service, tolerance_percent=2.0)
     
     async def grade_response(
         self,
         test_id: str,
         question_id: str,
-        answer: str
-    ) -> Tuple[bool, float]:
-        """Grade a single response.
+        answer: str,
+        behavioral_data: Optional[BehavioralPayload] = None
+    ) -> Tuple[bool, float, Optional[str], Optional[str], Optional[str]]:
+        """Grade a single response using hybrid evaluation routing.
         
         Args:
             test_id: Test UUID
             question_id: Question UUID
             answer: Student answer
+            behavioral_data: Optional behavioral tracking data
             
         Returns:
-            Tuple of (is_correct, score)
+            Tuple of (is_correct, score, error_type, misconception, method_detected)
         """
         # Get question
         question = await self.question_repo.get_question_by_id(question_id)
@@ -76,27 +82,49 @@ class ScoringService:
                 answer_to_grade, question, metadata, max_score
             )
             logger.info(f"Graded drawing answer for question {question_id}: correct={is_correct}, score={score}")
-        # Grade based on question type
-        elif question_type == 'multiple_choice':
-            is_correct, score = self._grade_mcq(answer_to_grade, metadata, max_score)
-        elif question_type == 'short_answer':
-            is_correct, score = await self._grade_short_answer(
-                answer_to_grade, metadata, max_score
-            )
-        elif question_type == 'problem_solving':
-            is_correct, score = self._grade_problem_solving(
-                answer_to_grade, metadata, max_score
-            )
+            error_type = ErrorType.NONE
+            misconception = None
+            method_detected = "drawing_evaluation"
         else:
-            # Default: exact match
-            is_correct, score = self._grade_exact_match(answer_to_grade, metadata, max_score)
+            # Use question router for hybrid evaluation
+            correct_answer = metadata.get('correct_answer', '')
+            expected_answer = metadata.get('expected_answer', '') or metadata.get('blueprint', {}).get('expected_answer', '')
+            
+            # Extract concept tags from metadata if available
+            concept_tags = None
+            if isinstance(metadata.get('blueprint'), dict):
+                concept_tags = metadata['blueprint'].get('concept_tags', [])
+            elif 'concept_name' in metadata:
+                concept_tags = [metadata.get('concept_name')]
+            
+            # Route to appropriate evaluator
+            is_correct, score, method_detected, error_type, misconception = await self.question_router.evaluate(
+                student_answer=answer_to_grade,
+                question_type=question_type,
+                correct_answer=correct_answer,
+                expected_answer=expected_answer,
+                metadata=metadata,
+                max_score=max_score,
+                question_text=question.get('text', ''),
+                concept_tags=concept_tags
+            )
         
-        # Update response score
+        # Apply behavioral penalties
+        if behavioral_data:
+            score = self._apply_behavioral_penalties(score, max_score, behavioral_data)
+        
+        # Update response score with error information
         await self.test_repo.update_response_score(
-            test_id, question_id, score, is_correct
+            test_id, question_id, score, is_correct,
+            error_type=error_type.value if error_type else None,
+            misconception=misconception,
+            method_detected=method_detected
         )
         
-        return is_correct, score
+        # Store error type and misconception in response metadata if available
+        # (This would require extending the test_responses table or using metadata field)
+        
+        return is_correct, score, error_type.value if error_type else None, misconception, method_detected
     
     def _extract_answer_component(
         self,
@@ -456,6 +484,39 @@ class ScoringService:
         
         return is_correct, score
     
+    def _apply_behavioral_penalties(
+        self,
+        score: float,
+        max_score: float,
+        behavioral_data: BehavioralPayload
+    ) -> float:
+        """Apply penalties based on behavioral data.
+        
+        Args:
+            score: Current score
+            max_score: Maximum possible score
+            behavioral_data: Behavioral tracking data
+            
+        Returns:
+            Adjusted score after penalties
+        """
+        adjusted_score = score
+        
+        # Hint penalty: -10% per hint accessed
+        if behavioral_data.hints_accessed and behavioral_data.hints_accessed > 0:
+            hint_penalty = max_score * 0.10 * behavioral_data.hints_accessed
+            adjusted_score = max(0.0, adjusted_score - hint_penalty)
+            logger.debug(
+                f"Applied hint penalty: {hint_penalty:.2f} "
+                f"(hints_accessed={behavioral_data.hints_accessed})"
+            )
+        
+        # Confidence score weighting (for mastery updates, not score adjustment)
+        # High confidence + wrong answer = deeper misconception
+        # This is handled in mastery service, not here
+        
+        return adjusted_score
+    
     async def grade_test(self, test_id: str) -> Dict[str, Any]:
         """Grade all responses in a test.
         
@@ -482,8 +543,17 @@ class ScoringService:
             
             question_id = question['question_id']
             try:
-                is_correct, score = await self.grade_response(
-                    test_id, question_id, response
+                # Extract behavioral data from response if available
+                behavioral_data = None
+                if isinstance(response, dict) and 'behavioral_data' in response:
+                    behavioral_data = BehavioralPayload(**response['behavioral_data'])
+                    # Extract actual answer
+                    answer = response.get('answer', response.get('text', ''))
+                else:
+                    answer = response
+                
+                is_correct, score, error_type, misconception, method = await self.grade_response(
+                    test_id, question_id, answer, behavioral_data
                 )
                 graded_count += 1
                 if is_correct:

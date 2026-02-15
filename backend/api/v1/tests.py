@@ -162,13 +162,18 @@ async def get_subjects_topics(
         
         # Get unique subjects and their topics from concepts
         # Subject is at document level (one PDF = one subject)
+        # Include concepts linked via both direct document_id and document_concepts junction table
         subject_topic_data = await db.fetch(
             """
             SELECT DISTINCT 
                 COALESCE(NULLIF(d.subject, ''), 'Uncategorized') as subject,
                 NULLIF(TRIM(c.subtopic), '') as topic
             FROM concepts c
-            JOIN documents d ON c.document_id = d.id
+            LEFT JOIN document_concepts dc ON c.id = dc.concept_id
+            JOIN documents d ON (
+                c.document_id = d.id 
+                OR dc.document_id = d.id
+            )
             WHERE d.id::text = ANY($1::text[])
             AND d.is_active = TRUE
             AND (d.status = 'ready' OR d.status IS NULL OR d.status = 'processing')
@@ -922,12 +927,18 @@ async def save_answer(
                 detail=f"Cannot answer test with status: {test['status']}"
             )
         
+        # Convert behavioral payload to dict if provided
+        behavioral_data = None
+        if request.behavioral_data:
+            behavioral_data = request.behavioral_data.dict(exclude_none=True)
+        
         # Save answer
         await test_repo.save_response(
             test_id=test_id,
             question_id=request.question_id,
             answer=request.answer,
-            time_spent_seconds=request.time_spent_seconds
+            time_spent_seconds=request.time_spent_seconds,
+            behavioral_data=behavioral_data
         )
         
         return {"saved": True, "test_id": test_id, "question_id": request.question_id}

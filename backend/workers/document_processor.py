@@ -369,12 +369,13 @@ class DocumentProcessor:
                             from services.knowledge_graph_service import KnowledgeGraphService
                             normalized_difficulty = KnowledgeGraphService._normalize_difficulty(raw_difficulty)
                             
-                            # Include subject in question metadata
+                            # Include subject and document_id in question metadata
                             question_metadata = {
                                 "associated_visuals": question_data.get("associated_visuals", []),
                                 "visual_metadata": question_data.get("visual_metadata"),
                                 "answer": question_data.get("answer"),  # Store extracted answer
-                                "subject": document_subject  # Store subject with question
+                                "subject": document_subject,  # Store subject with question
+                                "document_id": document_id  # Store document_id to track question origin
                             }
                             question_id = await self.question_repo.create_question(
                                 concept_id=concept_id,

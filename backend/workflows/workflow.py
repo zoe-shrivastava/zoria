@@ -236,6 +236,10 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
                         "type": "input_file",
                         "file_data": f"data:application/pdf;base64,{b64_file}",
                         "filename": filename,
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "Extract the entire document into structured Markdown format. Process all sections, all questions (including numbered problems 1-133 or whatever exists), all answer supplements, and all visuals. Do not ask questions - extract everything automatically."
                     }
                 ],
             })
@@ -249,6 +253,10 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
                         "type": "input_file",
                         "file_data": f"data:application/pdf;base64,{workflow['pdf_base64']}",
                         "filename": filename,
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "Extract the entire document into structured Markdown format. Process all sections, all questions (including numbered problems 1-133 or whatever exists), all answer supplements, and all visuals. Do not ask questions - extract everything automatically."
                     }
                 ],
             })
@@ -272,10 +280,40 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
         }
         state["markdown"] = document_parser_result["output_text"]
         
+        # Debug: Log markdown length and preview
+        markdown_length = len(state["markdown"]) if state["markdown"] else 0
+        markdown_preview = state["markdown"][:500] if state["markdown"] else "EMPTY"
+        logger.info(f"Document parser output: {markdown_length} characters")
+        logger.debug(f"Markdown preview (first 500 chars): {markdown_preview}")
+        
+        if not state["markdown"] or markdown_length < 100:
+            logger.error(f"Document parser returned empty or very short markdown ({markdown_length} chars). This will cause zero concepts.")
+        
+        # Create fresh conversation history with only markdown for concept extractor
+        # The concept extractor needs markdown input, not the PDF
+        markdown_text = state["markdown"] if state["markdown"] else "No markdown content available. Please extract concepts from the document."
+        
+        # Add explicit instruction to ensure concepts are extracted
+        concept_extractor_input = f"""Extract all concepts from the following markdown. You MUST return at least one concept. Process all questions, sections, and educational content.
+
+{markdown_text}"""
+        
+        concept_extractor_history = [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": concept_extractor_input
+                }
+            ]
+        }]
+        
+        logger.info(f"Sending {len(markdown_text)} characters to concept extractor")
+        
         # Run concept extractor with logging
         concept_extrator_result_temp = await run_agent_with_logging(
             concept_extrator,
-            input_data=conversation_history,
+            input_data=concept_extractor_history,
             run_config=RunConfig(trace_metadata={
                 "__trace_source__": "agent-builder",
                 "workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef"
@@ -287,14 +325,35 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
 
         conversation_history.extend([item.to_input_item() for item in concept_extrator_result_temp.new_items])
 
-        concept_extrator_result = {
-            "output_text": concept_extrator_result_temp.final_output.json(),
-            "output_parsed": concept_extrator_result_temp.final_output.model_dump()
-        }
+        # Debug: Check if output is valid
+        try:
+            concept_extrator_result = {
+                "output_text": concept_extrator_result_temp.final_output.json(),
+                "output_parsed": concept_extrator_result_temp.final_output.model_dump()
+            }
+            logger.debug(f"Concept extractor output keys: {list(concept_extrator_result['output_parsed'].keys())}")
+            logger.debug(f"Concept extractor output type: {type(concept_extrator_result['output_parsed'])}")
+        except Exception as e:
+            logger.error(f"Failed to parse concept extractor output: {e}")
+            logger.error(f"Raw output type: {type(concept_extrator_result_temp.final_output)}")
+            logger.error(f"Raw output: {str(concept_extrator_result_temp.final_output)[:500]}")
+            # Try to get string output as fallback
+            try:
+                raw_text = concept_extrator_result_temp.final_output_as(str)
+                logger.error(f"Raw text output (first 1000 chars): {raw_text[:1000]}")
+            except Exception as e2:
+                logger.error(f"Could not get string output: {e2}")
+            raise
         
         # Extract subject_name from concepts output (no need for separate LLM call)
         extracted_subject = None
         concepts_list = concept_extrator_result["output_parsed"].get("concepts", [])
+        logger.info(f"Extracted {len(concepts_list)} concepts from output")
+        
+        if len(concepts_list) == 0:
+            logger.warning("⚠️  ZERO CONCEPTS EXTRACTED!")
+            logger.warning(f"Output structure: {list(concept_extrator_result['output_parsed'].keys())}")
+            logger.warning(f"Full output (first 2000 chars): {str(concept_extrator_result['output_parsed'])[:2000]}")
         if concepts_list:
             # Collect all subject_names from concepts
             subject_names = [c.get("subject_name") for c in concepts_list if c.get("subject_name")]
@@ -315,19 +374,15 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
                 extracted_subject = normalize_subject_name(most_common_subject_name)
                 logger.info(f"Extracted subject from concepts: '{most_common_subject_name}' -> '{extracted_subject}'")
             else:
-                logger.warning("Concepts output does not contain subject_name, falling back to markdown extraction")
-                # Fallback: extract from markdown if subject_name is missing
-                extracted_subject = await extract_subject_from_markdown(state["markdown"])
+                logger.warning("Concepts output does not contain subject_name. Subject will be None.")
         else:
-            logger.warning("No concepts found in output, falling back to markdown extraction")
-            # Fallback: extract from markdown if no concepts
-            extracted_subject = await extract_subject_from_markdown(state["markdown"])
+            logger.warning("No concepts found in output. Subject will be None.")
         
         state["subject"] = extracted_subject
         if state["subject"]:
             logger.info(f"Final subject: {state['subject']}")
         else:
-            logger.warning("Could not extract subject from concepts or markdown")
+            logger.warning("Could not extract subject from concepts output")
         
         end_result = {
             "markdown": state["markdown"],
@@ -401,11 +456,9 @@ async def extract_concepts_from_markdown(
             extracted_subject = normalize_subject_name(most_common_subject_name)
             logger.info(f"Extracted subject from concepts: '{most_common_subject_name}' -> '{extracted_subject}'")
         else:
-            logger.warning("Concepts output does not contain subject_name, falling back to markdown extraction")
-            extracted_subject = await extract_subject_from_markdown(markdown)
+            logger.warning("Concepts output does not contain subject_name. Subject will be None.")
     else:
-        logger.warning("No concepts found in output, falling back to markdown extraction")
-        extracted_subject = await extract_subject_from_markdown(markdown)
+        logger.warning("No concepts found in output. Subject will be None.")
     
     return {
         "concepts": concept_extrator_result["output_parsed"],

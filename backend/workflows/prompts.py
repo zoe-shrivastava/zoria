@@ -15,6 +15,13 @@ DOCUMENT_PARSER_PROMPT = """# GPT-5-MINI SYSTEM INSTRUCTIONS (OPTIMIZED)
 ## Objective
 Extract structured educational content from documents (PDFs, images, worksheets). Output must be **Markdown**, clearly separating sections, questions, answers, and visuals/graphs.
 
+## CRITICAL: Processing Instructions
+- **DO NOT ask questions or request clarification.** Process the entire document automatically.
+- **Extract ALL content:** Every section, every question (1-133 or whatever numbering exists), all answer supplements, and all visuals.
+- **Complete extraction required:** Do not ask if you should extract everything - just do it. Extract the complete worksheet/document.
+- **No partial extractions:** Process the entire document from start to finish without asking for page ranges or problem numbers.
+- **Output immediately:** Begin extraction and output the Markdown structure without waiting for confirmation.
+
 ---
 
 ## Extraction Rules
@@ -61,12 +68,14 @@ Extract structured educational content from documents (PDFs, images, worksheets)
 ---
 
 ## Additional Instructions
-1. Merge OCR fragments into logical units.
-2. Identify mathematical formulas.
-3. Capture relationships in diagrams (arrows, vectors, labels).
-4. Use Markdown headings for hierarchy: section → question → parts → visuals.
-5. Avoid redundant text; keep output concise.
-6. Skip coordinates unless needed for downstream visualization.
+1. **Process the ENTIRE document automatically** - Extract all sections, all questions (numbered 1-133 or whatever exists), all answer supplements, and all visuals. Do NOT ask questions or request clarification.
+2. Merge OCR fragments into logical units.
+3. Identify mathematical formulas.
+4. Capture relationships in diagrams (arrows, vectors, labels).
+5. Use Markdown headings for hierarchy: section → question → parts → visuals.
+6. Avoid redundant text; keep output concise.
+7. Skip coordinates unless needed for downstream visualization.
+8. **Begin extraction immediately** - Do not wait for user confirmation or ask which parts to extract. Process everything.
 
 ---
 
@@ -107,6 +116,11 @@ Key Features: [\"position changes sign at t=5s\"]"""
 CONCEPT_EXTRACTOR_PROMPT = """
 # SYSTEM INSTRUCTIONS: DOMAIN-AGNOSTIC ATOMIC EXTRACTION
 
+## CRITICAL: Output Requirements
+- **You MUST output at least one concept.** If you receive markdown content, you MUST extract concepts from it.
+- **Never return an empty concepts array.** If the markdown contains questions, sections, or educational content, extract it.
+- **If markdown is empty or minimal, still extract at least one concept** based on available content or default to a general concept.
+
 ## 1. Objective
 You are a high-fidelity data parser. Your goal is to convert **pre-processed Markdown** into a strictly structured JSON object. You must ensure **zero data loss**. Every question, sub-question, and table row must be represented as a complete, independent object.
 
@@ -119,8 +133,25 @@ You are a high-fidelity data parser. Your goal is to convert **pre-processed Mar
   - **Concatenation Rule:** Merge multiple attributes from a single item into one string. 
   - *Example:* `"answer": "Definition: total path length; Symbol: d; SI Units: m; Scalar/Vector: Scalar"`
 
-## 3. Atomic Processing Logic
-- **Row-Level Extraction:** If a section contains a list or a chart (e.g., q2.1 through q2.12), you must generate a **separate** question object for every single row. 
+## 3. Atomic Processing Logic & Type Mapping
+- **Row-Level Extraction (Mandatory):** You are strictly forbidden from grouping multiple rows of a table or multiple items in a list into a single JSON object. Every independent data point must be its own `question` object.
+    - **Tabular Data:** Every row in a chart must generate a unique object.
+    - **Matching Lists:** Every term-definition pair must be a standalone object.
+    - **Text Formula:** Every `text` field must follow: `[Context/Instruction] + [Specific Item Name]`. 
+      *Example:* "Fill in the chart for physical quantities: Displacement"
+- **Strict Type Enforcement:** You must map every item to one of these six recognized types. Do not hallucinate types (e.g., do not use "diagram", "graph", or "mathematical_formula"):
+    1. `multiple_choice`: Fixed options or "circle the answer" format.
+    2. `short_answer`: Brief factual, numeric, or one-word responses.
+    3. `problem_solving`: Multi-step applications, calculations, or tasks requiring the student to "Draw", "Plot", or "Sketch".
+    4. `conceptual_question`: Qualitative explanations or "Why/How" reasoning.
+    5. `matching`: Pairing terms, definitions, or related categories.
+    6. `fill_in_the_blank`: Sentences with missing words or specific empty data cells in a table.
+
+## 3.1. Content Preservation & Answer Concatenation
+- **Zero Data Loss:** If a table row has multiple columns (e.g., Symbol, Unit, Definition), concatenate all data for that specific row into the `answer` field.
+  *Example:* `"answer": "Symbol: Δx; SI Units: m; Type: Vector"`
+- **Visual Integration:** If an item refers to a `Visual ID`, you must populate the `visual_metadata` object using the data found in the "Associated Visual" section. Include the description, axes labels, and key trends.
+- **Visual Action Mapping:** If a question asks a student to "Draw", "Graph", or "Plot", you must map the type to `problem_solving`. These are not "diagram" types; they are active problem-solving tasks.
 - **Visual Metadata:** If a `Visual ID` is referenced, you must locate the "Visual Summary" or "Associated Visual" section at the end of the Markdown. Populate the `visual_metadata` object for that specific question with the `description`, `axes`, and `features` provided.
 
 ## 4. Taxonomy Mapping
@@ -358,7 +389,7 @@ Return ONLY valid JSON. Ensure all quotes are escaped and the structure is valid
         {
           "text": "Parent Instruction: Specific Question Body",
           "answer": "Complete concatenated data extracted from the Markdown",
-          "type": "short_answer | multiple_choice | problem_solving | matching",
+          "type": "multiple_choice | short_answer | problem_solving | conceptual_question | matching | fill_in_the_blank",
           "associated_visuals": ["string"],
           "visual_metadata": {
              "id": "string",

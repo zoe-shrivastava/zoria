@@ -163,6 +163,8 @@ class QuestionGenerationService:
       // For FRQ questions: indicate if graph/diagram input is needed
       "needs_graph": false,  // Set to true if question requires graph drawing
       "needs_diagram": false,  // Set to true if question requires diagram drawing
+      // Optional: LaTeX TikZ code for visual aids (graphs, diagrams, charts)
+      "diagram_code": null,  // LaTeX TikZ code (e.g., "\\begin{{tikzpicture}}...\\end{{tikzpicture}}") for questions requiring visuals
       // Common fields:
       "solution_steps": [
         "Step 1...",
@@ -269,16 +271,26 @@ You are a high-fidelity Assessment Engine. Your goal is to transform provided St
 1. **Transformation:** Do not repeat the study guide questions verbatim. If the context provides an equation, create a question where the student must identify its properties (intercepts, vertex, growth) or apply it to a scenario.
 2. **Cognitive Level (Application):** Questions must require the user to perform a calculation or apply a rule. Avoid "Recall" questions (e.g., "What is the formula for...").
 3. **LaTeX Standard:** Use $...$ for all mathematical expressions and technical notation.
-4. **Visual Aids:** For any question involving geometry, functions, or data sets, include a [Image of X] tag within the question_text to provide a visual reference for the user.
-5. **Question Type Selection:** Choose the most appropriate question type for each question:
+4. **Question Type Selection:** Choose the most appropriate question type for each question:
    - **multiple_choice**: Use for questions with clear correct answers that can have plausible distractors. Include exactly 4 options (A, B, C, D) and use error_pattern_map to explain distractor design. REQUIRED: options, correct_answer, error_pattern_map.
    - **short_answer**: Use for questions requiring brief text or numeric responses (1-2 sentences or a number). REQUIRED: expected_answer (must be a specific answer, not a placeholder).
    - **problem_solving**: Use for multi-step problems requiring detailed solutions or explanations. REQUIRED: expected_answer (must be a specific answer or final result, not a placeholder).
-6. **Plausible Distractors (MCQ only):** For multiple_choice questions, analyze the "common_mistakes_patterns" in the subject profile. Every incorrect option must be reachable through a specific, identified error (e.g., a sign error or wrong order of operations).
-7. **CRITICAL - Correct Answers:** 
+4a. **Visual Aids and Diagrams:** For questions involving geometry, functions, data visualization, or visual concepts:
+   - Generate LaTeX TikZ code in the `diagram_code` field (in metadata) when the question requires a visual representation:
+     * **Graphs/Charts:** For questions about functions, data plots, coordinate geometry (e.g., linear functions, parabolas, scatter plots)
+     * **Geometric Diagrams:** For questions about shapes, angles, triangles, circles, etc.
+     * **Physics Diagrams:** For free-body diagrams, force vectors, motion diagrams, etc.
+     * **Chemistry Diagrams:** For molecular structures, reaction mechanisms, etc.
+   - The `diagram_code` should be valid LaTeX TikZ code that can be rendered as an image
+   - Format: Use `\\begin{{tikzpicture}}...\\end{{tikzpicture}}` with appropriate TikZ commands
+   - Include axes labels, scales, and key features relevant to the question
+   - Example: For a linear function $y = 2x + 3$, include a graph with labeled axes, the line, and key points
+   - If the question doesn't require a visual, omit `diagram_code` (it's optional)
+5. **Plausible Distractors (MCQ only):** For multiple_choice questions, analyze the "common_mistakes_patterns" in the subject profile. Every incorrect option must be reachable through a specific, identified error (e.g., a sign error or wrong order of operations).
+6. **CRITICAL - Correct Answers:** 
    - For multiple_choice: Always provide correct_answer (A, B, C, or D).
    - For short_answer and problem_solving: Always provide expected_answer with a specific, concrete answer. Do NOT use placeholders like "see solution" or "varies". The expected_answer must be the actual correct answer.
-8. **REQUIRED - Hints:** Every question MUST include a helpful hint that:
+7. **REQUIRED - Hints:** Every question MUST include a helpful hint that:
    - Guides students toward the solution without giving away the answer
    - Provides a nudge in the right direction (e.g., "Think about the key formula", "Consider what happens when x = 0", "Remember the order of operations")
    - Is specific to the question (not generic)
@@ -286,7 +298,7 @@ You are a high-fidelity Assessment Engine. Your goal is to transform provided St
    - Does NOT reveal the answer directly
    - Helps students understand the approach or key concept needed
 
-9. **Graph and Diagram Requirements (FRQ only):** For non-MCQ questions (short_answer, problem_solving), indicate if the question requires student input:
+8. **Graph and Diagram Requirements (FRQ only):** For non-MCQ questions (short_answer, problem_solving), indicate if the question requires student input:
    - **needs_graph**: Set to true if the question asks students to plot, graph, or visualize data (e.g., "Graph the function f(x) = 2x + 3", "Plot the data points", "Sketch the coordinate plane", "Draw a graph showing...")
    - **needs_diagram**: Set to true if the question asks students to draw geometric shapes, diagrams, or visual representations (e.g., "Draw a triangle", "Sketch a free-body diagram", "Illustrate the molecular structure", "Draw a diagram showing...")
    - Both should be false for text-only questions or questions that only require calculations
@@ -588,21 +600,21 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         # Build dynamic JSON schema that supports all question types (same as single-concept method)
         json_schema = """{{
   "questions": [
-    {{
-      "question_text": "Question text here",
+{{
+  "question_text": "Question text here",
       "question_type": "multiple_choice | short_answer | problem_solving",
-      "difficulty": "{difficulty}",
-      "cognitive_level": "application",
+  "difficulty": "{difficulty}",
+  "cognitive_level": "application",
       "hint": "A helpful hint that guides students toward the solution without giving away the answer",
       // For multiple_choice questions:
-      "options": [
-        {{"label": "A", "text": "Option A text"}},
-        {{"label": "B", "text": "Option B text"}},
-        {{"label": "C", "text": "Option C text"}},
-        {{"label": "D", "text": "Option D text"}}
-      ],
-      "correct_answer": "A",
-      "error_pattern_map": {{
+  "options": [
+    {{"label": "A", "text": "Option A text"}},
+    {{"label": "B", "text": "Option B text"}},
+    {{"label": "C", "text": "Option C text"}},
+    {{"label": "D", "text": "Option D text"}}
+  ],
+  "correct_answer": "A",
+  "error_pattern_map": {{
         "B": "name_of_common_mistakes_pattern_used",
         "C": "name_of_common_mistakes_pattern_used",
         "D": "name_of_common_mistakes_pattern_used"
@@ -612,75 +624,76 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
       // For FRQ questions: indicate if graph/diagram input is needed
       "needs_graph": false,  // Set to true if question requires graph drawing
       "needs_diagram": false,  // Set to true if question requires diagram drawing
+      // Optional: LaTeX TikZ code for visual aids (graphs, diagrams, charts)
+      "diagram_code": null,  // LaTeX TikZ code (e.g., "\begin{{tikzpicture}}...\end{{tikzpicture}}") for questions requiring visuals
       // Common fields:
       "solution_steps": [
         "Step 1...",
         "Step 2..."
       ],
-      "metadata": {{
+  "metadata": {{
         "estimated_time_seconds": 90
       }}
     }}
   ]
 }}"""
 
-        system_prompt = f"""## System Instruction
-You are a high-fidelity Assessment Engine. Your goal is to transform provided Study Context into {num_questions} unique, application-level test questions.
+        # Use regular string (not f-string) to avoid double-escaping backslashes and curly braces
+        # Then use .format() for interpolation - this is much cleaner and easier to maintain
+        json_schema_formatted = json_schema.format(difficulty=difficulty)
+        system_prompt = """## System Instruction
+**Role:** You are a high-fidelity **Question Engine**. Your goal is to transform the provided **Study Context** into exactly `{num_questions}` unique, application-level test questions for `{target_subject}` (`{grade_level}`).
 
-### Execution Rules:
-1. **Transformation:** Do not repeat the study guide questions verbatim. If the context provides an equation, create a question where the student must identify its properties (intercepts, vertex, growth) or apply it to a scenario.
-2. **Cognitive Level (Application):** Questions must require the user to perform a calculation or apply a rule. Avoid "Recall" questions (e.g., "What is the formula for...").
-3. **LaTeX Standard:** Use $...$ for all mathematical expressions and technical notation.
-4. **Visual Aids:** For any question involving geometry, functions, or data sets, include a [Image of X] tag within the question_text to provide a visual reference for the user.
-5. **Question Type Selection:** Choose the most appropriate question type for each question:
-   - **multiple_choice**: Use for questions with clear correct answers that can have plausible distractors. Include exactly 4 options (A, B, C, D) and use error_pattern_map to explain distractor design. REQUIRED: options, correct_answer, error_pattern_map.
-   - **short_answer**: Use for questions requiring brief text or numeric responses (1-2 sentences or a number). REQUIRED: expected_answer (must be a specific answer, not a placeholder).
-   - **problem_solving**: Use for multi-step problems requiring detailed solutions or explanations. REQUIRED: expected_answer (must be a specific answer or final result, not a placeholder).
-6. **Plausible Distractors (MCQ only):** For multiple_choice questions, analyze the "common_mistakes_patterns" in the subject profile. Every incorrect option must be reachable through a specific, identified error (e.g., a sign error or wrong order of operations).
-7. **CRITICAL - Correct Answers:** 
-   - For multiple_choice: Always provide correct_answer (A, B, C, or D).
-   - For short_answer and problem_solving: Always provide expected_answer with a specific, concrete answer. Do NOT use placeholders like "see solution" or "varies". The expected_answer must be the actual correct answer.
-8. **REQUIRED - Hints:** Every question MUST include a helpful hint that:
-   - Guides students toward the solution without giving away the answer
-   - Provides a nudge in the right direction (e.g., "Think about the key formula", "Consider what happens when x = 0", "Remember the order of operations")
-   - Is specific to the question (not generic)
-   - Is at least 10 characters long
-   - Does NOT reveal the answer directly
-   - Helps students understand the approach or key concept needed
+---
 
-9. **Graph and Diagram Requirements (FRQ only):** For non-MCQ questions (short_answer, problem_solving), indicate if the question requires student input:
-   - **needs_graph**: Set to true if the question asks students to plot, graph, or visualize data (e.g., "Graph the function f(x) = 2x + 3", "Plot the data points", "Sketch the coordinate plane", "Draw a graph showing...")
-   - **needs_diagram**: Set to true if the question asks students to draw geometric shapes, diagrams, or visual representations (e.g., "Draw a triangle", "Sketch a free-body diagram", "Illustrate the molecular structure", "Draw a diagram showing...")
-   - Both should be false for text-only questions or questions that only require calculations
-   - These flags control which drawing tools are available to students in the UI
+### 1. Universal Execution Rules
+* **Transformation Logic:** Do not repeat context questions verbatim. Convert static facts into "Scenario-Action" problems. If a formula is provided, ask the student to apply it to a new scenario or analyze its properties (intercepts, vertex, growth).
+* **Cognitive Level:** Every question must require a calculation, rule application, or analysis. Avoid "Recall" questions (e.g., No "What is the formula for...").
+* **Difficulty Scaling (`{difficulty}`):**
+    * `easy`: 100% Foundational application.
+    * `medium`: Balanced mix of Easy and Medium.
+    * `hard`: Distribution of Easy, Medium, and Hard.
 
-**Target Subject:** {target_subject}
-**Target Grade:** {grade_level}
-**Difficulty Selection (Inclusive):** {difficulty}
-   - If "easy" is selected: Generate only easy questions
-   - If "medium" is selected: Generate easy and medium questions (inclusive)
-   - If "hard" is selected: Generate easy, medium, and hard questions (inclusive)
-   - When generating, vary the difficulty levels appropriately within the selected range
+### 2. LaTeX, Units & Currency (Strict JSON Formatting)
+* **Double-Escaping Requirement:** You MUST use double-backslashes (`\\`) for all LaTeX commands within the JSON string (e.g., `"\\text{{kg}}"`, `"\\Delta"`, `"\\frac"`). Failure to do so causes "missing character" errors like `\ext`.
+* **Unit Formatting:** Always use the format `$Value \\text{{ Unit}}$`. 
+    * **Space:** Ensure exactly one standard space between the number and the `\\text` command. 
+    * **Prohibition:** DO NOT use `\\;` or other internal LaTeX spacing inside the `\\text{{}}` block.
+* **Consistency:** Wrap ALL variables, numbers with units, and operators in `$ ... $` across all JSON fields (text, options, hints, and steps).
+* **Currency:** Use double-escaped symbols (e.g., `$\\$`, `$€$`). Format to two decimal places (e.g., `$\\$10.50$`).
 
-**Subject Profile:**
-{subject_profile_json}
+### 3. Visual Aids and Diagramming
+* **diagram_code (AI-Generated Visual):** Proactively provide a valid TikZ visualization (`\\begin{{tikzpicture}}...\\end{{tikzpicture}}`) whenever the question involves:
+    * **Spatial Scenarios:** Inclined planes, pulleys, vector addition, or geometric shapes.
+    * **Data/Functions:** Coordinate geometry, functional graphs, or statistical charts.
+    * **Logic/Flow:** Timelines, cause-effect flowcharts, or logic trees.
+    * *Rule:* If the student's understanding would be improved by a visual reference, generate the code. Use double-backslashes (`\\`) for all TikZ commands.
+* **Interactive Flags (Student Input Response):**
+    * **needs_graph**: Set to `true` ONLY if the question explicitly asks the student to plot or sketch a graph as part of their answer.
+    * **needs_diagram**: Set to `true` ONLY if the question asks the student to draw a diagram (e.g., free-body diagram) as part of their answer.
 
-**Context & Sample Questions:**
-{context_text}
+### 4. Technical & Quality Constraints
+* **Distractor Logic:** Every incorrect MCQ option must be reachable through a specific error identified in the `common_mistakes_patterns` of the **Subject Profile** (e.g., sign error, reciprocal error, or unit neglect).
+* **Scaffolded Hints:** Every question MUST have a hint ($\ge 10$ characters) providing a "mental nudge" without revealing the answer.
+* **Solution Steps:** `multiple_choice` and `problem_solving` questions MUST include the specific mathematical or logical derivation in `solution_steps` to justify the result.
+* **Mandatory `expected_answer`:** For all question types EXCEPT `multiple_choice`, you must populate an `expected_answer` field with the correct factual answer, numeric result (with units), or ideal explanatory response.
+* **Mandatory `correct_answer`:** For question type `multiple_choice`.
 
-OUTPUT RULES:
-- Return JSON strictly matching the schema below. Do not include any extra fields.
-- Do NOT include any markdown or code fences. JSON only.
-- Vary question types appropriately based on the content - use multiple_choice, short_answer, and problem_solving as appropriate.
-- For multiple_choice: include options, correct_answer, and error_pattern_map.
-- For short_answer and problem_solving: include expected_answer with a specific, concrete answer (REQUIRED).
-- EVERY question must include a hint (REQUIRED).
+### 5. Input Data & Output Format
+* **Output:** Return **JSON only**. Do NOT include markdown code fences (```json) or preamble. Follow `{json_schema_placeholder}` exactly.
+* **Reference Data:**
+    * **Subject Profile:** `{subject_profile_json}`
+    * **Study Context:** `{context_text}`
 
-JSON SCHEMA:
-{json_schema.format(difficulty=difficulty)}
-
-"""
-
+""".format(
+            num_questions=num_questions,
+            target_subject=target_subject,
+            grade_level=grade_level,
+            difficulty=difficulty,
+            subject_profile_json=subject_profile_json,
+            context_text=context_text,
+            json_schema_placeholder=json_schema_formatted
+        )
         if system_instructions:
             system_prompt += f"\n\nSubject-specific instructions:\n{system_instructions}"
         if format_rules:
@@ -747,9 +760,10 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                 logger.warning(f"This may indicate the response was truncated due to max_tokens limit ({max_tokens})")
                 logger.warning(f"Consider increasing max_tokens or reducing num_questions")
             
-            # Log all question texts for debugging
+            # Log all question texts and hints for debugging
             for idx, q in enumerate(questions_list):
-                logger.debug(f"LLM Question {idx + 1}: {q.get('question_text', 'N/A')[:150]}... (concept: {q.get('concept_name', 'N/A')})")
+                hint_from_llm = q.get('hint', 'NOT_FOUND')
+                logger.debug(f"LLM Question {idx + 1}: {q.get('question_text', 'N/A')[:150]}... (concept: {q.get('concept_name', 'N/A')}, hint: {hint_from_llm[:100] if hint_from_llm != 'NOT_FOUND' else 'NOT_FOUND'})")
             
             # Process each question and map to concepts
             result = {cid: [] for cid in concept_ids}
@@ -767,6 +781,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                     if question_concept_name in concept_name or concept_name in question_concept_name:
                         matched_concept_id = concept_ids[i]
                         break
+                        break
                 
                 # If no match found, distribute evenly
                 if not matched_concept_id:
@@ -778,7 +793,10 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                 question_type = q_data.get("question_type", "multiple_choice")
                 
                 # Ensure hint is present and valid
-                hint = q_data.get("hint", "").strip()
+                raw_hint = q_data.get("hint", "")
+                hint = raw_hint.strip() if raw_hint else ""
+                logger.debug(f"Processing hint for question: raw='{raw_hint[:100] if raw_hint else 'EMPTY'}', stripped='{hint[:100] if hint else 'EMPTY'}', length={len(hint)}")
+                
                 if not hint or len(hint) < 10:
                     # Generate a basic hint if missing
                     if question_type == "multiple_choice":
@@ -789,7 +807,11 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                         hint = "Break down the problem into steps and identify what information you need."
                     else:
                         hint = "Review the key concepts related to this question."
-                    logger.warning(f"Question missing valid hint, generated default: {hint[:50]}...")
+                    logger.warning(f"Question missing valid hint (raw: '{raw_hint[:50] if raw_hint else 'EMPTY'}'), generated default: {hint[:50]}...")
+                else:
+                    # Hint exists and is valid - log it for debugging
+                    logger.info(f"Question has valid hint ({len(hint)} chars): {hint[:100]}...")
+                # If hint exists and is valid, keep it as-is (don't replace it)
                 
                 # Validate hint is not a placeholder
                 placeholder_patterns = ["n/a", "tbd", "to be determined", "see solution", "see above", "varies"]
@@ -886,7 +908,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                 q_data["metadata"].update({
                     "concept_name": concept_meta.get('concept_name', ''),
                     "keywords": concept_meta.get('keywords', []),
-                })
+            })
                 
                 # Store diagram_code in metadata if present (for rendering in frontend)
                 diagram_code = q_data.pop("diagram_code", None)
@@ -907,34 +929,34 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                     try:
                         rules = get_validation_rules(subject_id)
                         if rules.get("must_include_units_when_numerical"):
-                            q_data["metadata"].setdefault("requires_units", True)
+                                q_data["metadata"].setdefault("requires_units", True)
                     except Exception as e:
                         logger.warning(f"Failed to load validation rules for subject {subject_id}: {e}")
-                
-                # Build blueprint model (diagram_code is now in metadata, not top-level)
-                try:
-                    blueprint = GeneratedQuestionBlueprint(
-                        subject=subject_id,
-                        concept_id=str(matched_concept_id),
-                        **q_data,
-                    )
-                    
-                    # Validate blueprint
-                    self.validator.validate(blueprint)
-                    
-                    result[matched_concept_id].append({
+
+                    # Build blueprint model (diagram_code is now in metadata, not top-level)
+                    try:
+                        blueprint = GeneratedQuestionBlueprint(
+                            subject=subject_id,
+                                    concept_id=str(matched_concept_id),
+                                    **q_data,
+                        )
+
+                        # Validate blueprint
+                        self.validator.validate(blueprint)
+
+                        result[matched_concept_id].append({
                         "blueprint": blueprint,
-                        "raw": q_data,
-                    })
-                    total_processed += 1
-                    logger.debug(f"✓ Successfully processed question {total_processed}: {blueprint.question_text[:100]}... for concept {matched_concept_id}")
-                except Exception as e:
-                    total_failed_validation += 1
-                    logger.error(f"✗ Failed to process question for concept {matched_concept_id}: {e}")
-                    logger.error(f"Question data keys: {list(q_data.keys())}")
-                    logger.error(f"Question text preview: {q_data.get('question_text', 'N/A')[:200]}")
-                    # Continue processing other questions instead of failing completely
-                    continue
+                                "raw": q_data,
+                            })
+                        total_processed += 1
+                        logger.debug(f"✓ Successfully processed question {total_processed}: {blueprint.question_text[:100]}... for concept {matched_concept_id}")
+                    except Exception as e:
+                        total_failed_validation += 1
+                        logger.error(f"✗ Failed to process question for concept {matched_concept_id}: {e}")
+                        logger.error(f"Question data keys: {list(q_data.keys())}")
+                        logger.error(f"Question text preview: {q_data.get('question_text', 'N/A')[:200]}")
+                        # Continue processing other questions instead of failing completely
+                continue
             
             logger.info(f"Question processing summary: {total_processed} processed successfully, {total_failed_validation} failed validation")
             logger.info(f"Questions per concept: {[(cid, len(questions)) for cid, questions in result.items()]}")
@@ -1009,11 +1031,13 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             embedding = await self.embedding_service.generate_embedding(question_text)
         
         # Prepare metadata
+        hint_value = question_data.get('hint', '')
+        logger.debug(f"Storing question with hint in metadata: '{hint_value[:100] if hint_value else 'EMPTY'}' (length: {len(hint_value) if hint_value else 0})")
         metadata = {
             'options': question_data.get('options', []),
             'correct_answer': question_data.get('answer', ''),
             'expected_answer': question_data.get('expected_answer', ''),
-            'hint': question_data.get('hint', ''),
+            'hint': hint_value,
             'explanation': question_data.get('explanation', ''),
             'generated_by': 'llm',
             'model': self.llm_service.model_name,
@@ -1116,20 +1140,20 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         generated_questions = []
         duplicates = 0
         attempts = 0
-        
+            
         try:
             attempts += 1
             # Generate all questions via LLM in one request
             gen_results = await self.generate_all_questions_via_llm(
-                concept_metadata,
+                    concept_metadata,
                 num_questions=num_questions,
-                question_type=question_type,
-                difficulty=difficulty,
-                grade_level=grade_level,
-                subject_id=subject_id,
-                selected_topics=selected_topics,
+                    question_type=question_type,
+                    difficulty=difficulty,
+                    grade_level=grade_level,
+                    subject_id=subject_id,
+                    selected_topics=selected_topics,
                 subject_profile=subject_profile,
-            )
+                )
             
             # Process each generated question: check duplicates and store
             for gen_result in gen_results:
