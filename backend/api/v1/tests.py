@@ -1424,3 +1424,176 @@ async def list_study_guides(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list study guides: {str(e)}"
         )
+
+
+@router.post("/study-guide/coach/chat")
+async def chat_with_coach(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
+    """Chat with AI Coach about a study guide.
+    
+    POST /api/v1/tests/study-guide/coach/chat
+    Body: {
+        "guide_id": "uuid",
+        "message": "user message",
+        "conversation_history": [...],
+        "context": {
+            "activeTopic": "...",
+            "relatedError": {...},
+            "navigationState": "GUIDE"
+        }
+    }
+    """
+    try:
+        from services.study_guide_service import StudyGuideService
+        
+        guide_id = request.get("guide_id")
+        message = request.get("message")
+        conversation_history = request.get("conversation_history", [])
+        context = request.get("context", {})
+        
+        if not guide_id or not message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="guide_id and message are required"
+            )
+        
+        # Get study guide
+        study_guide_service = StudyGuideService(db)
+        guide = await study_guide_service.get_study_guide(guide_id)
+        
+        if not guide:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Study guide not found"
+            )
+        
+        # Check access
+        user_role = current_user.get("role")
+        user_child_id = current_user.get("child_id")
+        
+        if user_role == "child" and str(user_child_id) != str(guide['child_id']):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You can only chat about your own study guides"
+            )
+        
+        # Build system prompt for Socratic AI Coach
+        system_prompt = _build_coach_system_prompt(guide, context)
+        
+        # Prepare messages
+        messages = []
+        for msg in conversation_history:
+            messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        messages.append({
+            "role": "user",
+            "content": message
+        })
+        
+        # Call LLM
+        llm_service = LLMService(
+            model_name="llama3.1",
+            enable_logging=True,
+            context_source="ai_coach"
+        )
+        
+        response = await llm_service.chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=0.7,
+            max_tokens=1000,
+            test_id=None,
+            metadata={
+                "guide_id": guide_id,
+                "context": context
+            }
+        )
+        
+        content = response.get("text", "") or response.get("content", "")
+        
+        # Parse response for deep linking actions
+        actions = _parse_coach_response(content)
+        
+        return {
+            "success": True,
+            "response": content,
+            "actions": actions
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in AI Coach chat: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to chat with coach: {str(e)}"
+        )
+
+
+def _build_coach_system_prompt(guide: dict, context: dict) -> str:
+    """Build system prompt for Socratic AI Coach."""
+    prompt = """# Role: Socratic AI Coach (Llama 3.1)
+You are a brilliant, supportive tutor. Your goal is to guide students to mastery by using the provided **Study Guide** as a topical anchor while utilizing your own vast knowledge to provide analogies, explanations, and practice.
+
+## 1. THE KNOWLEDGE HIERARCHY
+- **Scope Anchor**: Use the provided `[STUDY_GUIDE]` to identify which topics are "in-bounds." Do not teach advanced concepts (e.g., Relativity) if the guide only covers Classical Mechanics.
+- **Explaining**: You are encouraged to use your own knowledge to explain concepts in simpler terms, use creative analogies, or provide real-world examples not found in the guide.
+- **Practice Generation**: You may generate original practice questions on the fly to test a user's understanding of a specific section.
+
+## 2. SOCRATIC PROTOCOL (The "Guide, Don't Tell" Rule)
+- **Identify Confusion**: Ask the user what specifically they are finding difficult.
+- **Avoid Direct Answers**: If a user asks "What is the formula for X?", respond with: "You'll find that in the [Fundamental Principles] section. It relates Force and Mass—do you remember how those two interact?"
+- **Scaffolded Learning**: If a user is stuck on a calculation, provide the first step only, then ask them for the second.
+
+## 3. UI NAVIGATION CONTROL
+You act as the navigator for the Learning Drawer. Use these tags to trigger UI changes:
+- `[NAV:GUIDE:#section_id]`: Automatically scroll the Study Guide to a specific section.
+- `[NAV:CARDS]`: Switch the drawer view to the Revision Cards tab.
+- **Markdown Links**: Use [View Guide](guide) or [Try Cards](cards) for manual navigation.
+
+## 4. TECHNICAL & FORMATTING
+- **LaTeX**: Always use double-backslashes for math: `\\vec{F} = ma`.
+- **Brevity**: Keep responses under 3-4 sentences. The conversation should be a back-and-forth, not a lecture.
+
+## 5. STUDY GUIDE CONTEXT
+"""
+    
+    # Add guide content summary
+    if guide.get("content"):
+        content_preview = guide["content"][:1000]  # First 1000 chars
+        prompt += f"\nStudy Guide Content Preview:\n{content_preview}\n"
+    
+    # Add context about errors
+    if context.get("relatedError"):
+        error_info = context["relatedError"]
+        prompt += f"""
+## STUDENT ERROR CONTEXT
+- Topic: {context.get('activeTopic', 'Unknown')}
+- Error Type: {error_info.get('errorType', 'Unknown')}
+- Misconceptions: {', '.join(error_info.get('misconceptions', []))}
+"""
+    
+    prompt += """
+Remember: Guide, don't tell. Ask questions that lead to understanding.
+"""
+    
+    return prompt
+
+
+def _parse_coach_response(content: str) -> dict:
+    """Parse coach response for navigation actions."""
+    actions = {}
+    
+    # Check for navigation suggestions
+    if "[Revision Card]" in content or "[revision card]" in content.lower() or "(cards)" in content.lower():
+        actions["navigateToTab"] = "CARDS"
+    elif "[Guide]" in content or "(guide)" in content.lower():
+        actions["navigateToTab"] = "GUIDE"
+    
+    return actions

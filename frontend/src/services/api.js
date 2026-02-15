@@ -448,6 +448,12 @@ export const tests = {
       method: 'GET',
     })
   },
+
+  chatWithCoach: (data) =>
+    apiRequest('/api/v1/tests/study-guide/coach/chat', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }
 
 /**

@@ -116,58 +116,41 @@ class StudyGuideService:
             sample_questions=sample_questions or []
         )
         
-        system_prompt = """You are an expert educational tutor specializing in creating comprehensive, detailed study guides. 
-Your task is to create a thorough, personalized study guide that provides ALL the information a student needs to master a specific concept.
+        system_prompt = """
+        You are an expert educational tutor. Your task is to generate a DETAILED, COMPREHENSIVE study guide in Markdown. 
+Because this is for the Zoria Learning System, you must use specific structural patterns that our frontend will transform into interactive "Knowledge Blocks."
 
-The study guide MUST be comprehensive and include:
+## 1. STRUCTURAL DIRECTIVES
+- **Tone**: Professional, encouraging, and clear (Middle School level).
+- **LaTeX**: Use double-backslashes for all math (e.g., `\\vec{F} = ma`).
+- **Formatting**: Use Bold for key terms and Blockquotes for "Missions."
 
-1. **Concept Overview**: Clear, detailed explanation of what the concept is, why it's important, and how it fits into the broader subject.
+## 2. ZORIA COMPONENT MAPPING
+Please structure your Markdown using these exact section headers so the UI can style them:
 
-2. **Fundamental Principles**: Core principles, rules, formulas, or definitions that the student must understand.
+### Concept Snapshot: [Topic Name]
+- Provide a clear definition and why it matters. 
+- Use a **"Zoria Analogy"** to explain the concept (e.g., "Imagine force like a push on a swing...").
 
-3. **Step-by-Step Problem Solving**: Detailed, worked examples showing:
-   - How to approach problems of this type
-   - Each step clearly explained
-   - Why each step is taken
-   - Common pitfalls to avoid at each step
+### Your Quest Map (Step-by-Step)
+- Use a numbered list to show the 1-2-3 approach to solving problems. 
+- Include a "Why?" after each step.
 
-4. **Detailed Examples**: Multiple examples with full solutions:
-   - Start with simple examples
-   - Progress to more complex ones
-   - Show variations and edge cases
-   - Include real-world applications if relevant
+### Zoria's Lab (Worked Examples)
+- Start with a "Level 1: Basic" example.
+- Move to a "Level 2: Complex" example.
+- Include a "Variation" or "Edge Case" to challenge the student.
 
-5. **Common Mistakes & How to Avoid Them**: 
-   - List specific mistakes the student is making
-   - Explain WHY these mistakes happen
-   - Show the CORRECT approach
-   - Provide strategies to avoid repeating these mistakes
+### Pitfall Patrol (Common Mistakes)
+- Address the student's specific errors (e.g., "No Answer" or "Incorrect Formula").
+- Explain the "Trap" and show the "Escape Route" (the correct way).
 
-6. **Practice Strategies**: 
-   - Specific types of problems to practice
-   - How to structure practice sessions
-   - How to check if understanding is improving
-   - Resources or methods for additional practice
+### The Cheat Sheet (Quick Reference)
+- Provide a Markdown table of formulas, units, and constants.
 
-7. **Visual Aids & Memory Techniques**: 
-   - Diagrams, charts, or visual representations if helpful
-   - Mnemonics or memory tricks
-   - Ways to organize information
-
-8. **Self-Assessment**: 
-   - How the student can test their understanding
-   - Signs that they've mastered the concept
-   - What to do if they're still struggling
-
-The study guide should be:
-- VERY DETAILED and COMPREHENSIVE (aim for 800-1500 words)
-- Written at an appropriate grade level
-- Include specific examples relevant to the student's errors
-- Be encouraging but also direct about areas needing improvement
-- Use clear headings and structure for easy reading
-- Include mathematical formulas, equations, or technical details as needed
-
-Format your response as a well-structured, comprehensive study guide with clear sections and subsections."""
+### 🎯 Mastery Check
+- List 3 signs that the student has mastered the concept.
+"""
         
         # Generate study guide using LLM
         try:
@@ -377,127 +360,65 @@ Format your response as a well-structured, comprehensive study guide with clear 
                 prompt_parts.append(f"{i}. {q_text}")
         
         prompt_parts.extend([
-            "",
-            "=" * 60,
-            "CRITICAL REQUIREMENTS FOR THIS STUDY GUIDE:",
-            "=" * 60,
-            "",
-            "This study guide MUST be COMPREHENSIVE and DETAILED. It should provide ALL the information",
-            "a student needs to learn and master this concept independently, without needing additional resources.",
-            "",
-            "MARKDOWN FORMATTING REQUIREMENTS:",
-            "",
-            "CRITICAL: You MUST use proper markdown heading hierarchy for all sections:",
-            "- Use # (h1) for the main title (e.g., '# Comprehensive Study Guide for [Concept Name]')",
-            "- Use ## (h2) for major section headings (e.g., '## Section 1: Introduction & Concept Overview')",
-            "- Use ### (h3) for subsections within major sections",
-            "- Use #### (h4) for sub-subsections if needed",
-            "",
-            "For mathematical expressions:",
-            "- Use inline LaTeX with single dollar signs: $formula$ (e.g., $F = ma$, $v = u + at$)",
-            "- Use display math with double dollar signs for centered equations: $$formula$$",
-            "- Always use proper LaTeX syntax (e.g., $\\text{units}$ for text in math mode)",
-            "",
-            "For lists and formatting:",
-            "- Use bullet points (-) for unordered lists",
-            "- Use numbered lists (1., 2., 3.) for sequential steps",
-            "- Use **bold** for emphasis on important terms",
-            "- Use *italic* for definitions or special terms",
-            "- Use code blocks (```) for formulas or code examples if needed",
-            "",
-            "REQUIRED SECTIONS (each must be thoroughly developed with proper markdown headings):",
-            "",
-            "## Section 1: Introduction & Concept Overview (150-200 words)",
-            "- What is this concept? Define it clearly.",
-            "- Why is it important? How is it used?",
-            "- Where does it fit in the broader subject?",
-            "- Real-world applications or examples.",
-            "",
-            "## Section 2: Fundamental Principles & Theory (200-300 words)",
-            "- Core principles, rules, or laws that govern this concept",
-            "- Key definitions and terminology",
-            "- Important formulas, equations, or relationships (use LaTeX: $F = ma$)",
-            "- Theoretical foundation - WHY things work this way",
-            "",
-            "## Section 3: Step-by-Step Problem-Solving Method (200-300 words)",
-            "- A clear, repeatable method for solving problems",
-            "- Step-by-step procedure with explanations",
-            "- Decision points: how to know which approach to use",
-            "- How to check your work",
-            "",
-            "## Section 4: Detailed Worked Examples (300-400 words)",
-            "- AT LEAST 3-5 complete, fully worked examples",
-            "- Start with simple, basic examples",
-            "- Progress to more complex, multi-step problems",
-            "- For EACH example, use ### for the example heading (e.g., '### Example 1: [Problem Description]')",
-            "- For EACH example, show:",
-            "  * The problem statement",
-            "  * Your thinking process (what to look for)",
-            "  * Step 1: [what to do and why]",
-            "  * Step 2: [what to do and why]",
-            "  * Step 3: [continue for all steps]",
-            "  * Final answer with units/formatting (use LaTeX for formulas)",
-            "  * Verification or check",
-            "",
-            "## Section 5: Common Errors & How to Fix Them (200-300 words)",
-            "- Address EACH common error listed above",
-            "- For each error, use ### for the error heading (e.g., '### Error 1: [Error Name]')",
-            "- CRITICAL: Use the detailed explanation provided for each error (the text after the colon)",
-            "  This detailed explanation comes from actual student answers and tells you exactly what went wrong.",
-            "- For each error, provide:",
-            "  * What the mistake looks like (based on the detailed explanation provided)",
-            "  * Why students make this specific mistake (use the detailed explanation to understand the root cause)",
-            "  * The CORRECT approach (contrast with what the student did wrong, as described in the detailed explanation)",
-            "  * How to recognize and avoid this error (specific strategies based on the detailed feedback)",
-            "- Include examples showing the wrong way (from the detailed explanation) vs. the right way",
-            "- Use tables or formatted lists to show comparisons when helpful",
-            "- Make the guidance SPECIFIC and ACTIONABLE - reference the detailed explanations provided",
-            "",
-            "## Section 6: Misconceptions Clarified (150-200 words)",
-            "- Address EACH misconception listed above",
-            "- For each misconception, use ### for the misconception heading (e.g., '### Misconception 1: [Description]')",
-            "- Explain why the misconception is wrong",
-            "- Provide the correct understanding",
-            "- Use examples to illustrate the correct concept",
-            "",
-            "## Section 7: Practice Problems with Guidance (200-250 words)",
-            "- Provide 3-5 practice problems of increasing difficulty",
-            "- For each problem, use ### for the problem heading (e.g., '### Problem 1: [Description]')",
-            "- For each problem:",
-            "  * The problem statement",
-            "  * Hints or guidance (what to think about first)",
-            "  * Key steps to follow",
-            "  * How to verify the answer",
-            "",
-            "## Section 8: Study & Practice Strategies (150-200 words)",
-            "- How to study this concept effectively",
-            "- Recommended practice schedule",
-            "- How to track progress",
-            "- When to seek additional help",
-            "",
-            "## Section 9: Quick Reference & Summary (100-150 words)",
-            "- Key formulas or rules in one place (use LaTeX: $F = ma$, $v = u + at$)",
-            "- Step-by-step procedure summary",
-            "- Common pitfalls reminder",
-            "",
-            "TONE & STYLE:",
-            "- Be encouraging and supportive",
-            "- Use clear, age-appropriate language",
-            "- Break complex ideas into smaller parts",
-            "- Use analogies when helpful",
-            "- Be thorough - assume the student knows very little about this concept",
-            "",
-            "LENGTH: Aim for 1500-2500 words of substantive, educational content.",
-            "This is a COMPREHENSIVE guide - it should be detailed enough that a student can learn",
-            "the concept from scratch using only this guide.",
-            "",
-            "OUTPUT FORMAT:",
-            "Output ONLY the markdown content. Do NOT include any meta-commentary, explanations, or",
-            "notes about the format. Just output the study guide content in proper markdown format",
-            "with the heading hierarchy and LaTeX formatting as specified above.",
-            "",
-            "=" * 60
-        ])
+    "",
+    "## CRITICAL REQUIREMENTS FOR THIS STUDY GUIDE",
+    "This guide must be the 'Definitive Masterclass' for the student. It must take them from ",
+    "confusion to total confidence using clear, structured pedagogy.",
+    "",
+    "### MARKDOWN & LATEX FORMATTING RULES:",
+    "- Use strict H1 > H2 > H3 hierarchy. Never skip a heading level.",
+    "- Use **bolding** for terms the first time they are defined.",
+    "- For math: Use inline $formula$ for variables and equations within sentences.",
+    "- For math: Use $$formula$$ on a new line for core laws and final steps in examples.",
+    "- Use `\\text{...}` inside LaTeX for units (e.g., $10 \\text{ m/s}^2$).",
+    "- Use standard Markdown tables for comparisons and summaries.",
+    "",
+    "### REQUIRED CONTENT STRUCTURE:",
+    "",
+    "## Section 1: Concept Foundation",
+    "- Define the concept using a relatable middle-school analogy (e.g., explaining 'Inertia' using a skateboard).",
+    "- Explain the 'Why': How does this make the world work? (Real-world context).",
+    "",
+    "## Section 2: Core Principles & Formulas",
+    "- Break down the theory into 'Bite-Sized' principles.",
+    "- Formulas: Provide the formula, then a bulleted list 'Legend' explaining every variable.",
+    "- Use display math ($$) for the primary equations so they stand out visually.",
+    "",
+    "## Section 3: The Systematic Problem-Solving Protocol",
+    "- Create a numbered 'Universal Strategy' that applies to any problem in this concept.",
+    "- Include a 'Self-Question' step (e.g., 'Ask yourself: What am I trying to find?').",
+    "",
+    "## Section 4: Worked Examples (Increasing Complexity)",
+    "- Minimum 3 examples: 1. Entry-Level, 2. Intermediate, 3. Challenge/Multi-step.",
+    "- For each: State the Problem, 'The Logic' (thinking process), then the 'Step-by-Step Solution'.",
+    "- High-quality LaTeX rendering for every calculation step is mandatory.",
+    "",
+    "## Section 5: The Pitfall Audit (Addressing Student Errors)",
+    "- CRITICAL: Directly address the specific errors provided in the context.",
+    "- For each error: Label the mistake clearly, explain the 'Logic Trap' (why it's tempting to do it wrong), ",
+    "  and provide the 'Correction' using a side-by-side comparison or table.",
+    "- If the student has 'No_Answer' errors, provide a 'First-Step Strategy' to overcome blank-page anxiety.",
+    "",
+    "## Section 6: Misconceptions Debunked",
+    "- Contrast 'Common Sense' (which is often wrong in science) with 'Scientific Fact'.",
+    "- Explain the 'Why' behind the correct understanding.",
+    "",
+    "## Section 7: Practice Quest (Guided Practice)",
+    "- Provide 3-5 problems. Do not provide the full solution, but provide 'Checkpoints' ",
+    "  (e.g., 'After Step 1, your value for Velocity should be $5 \\text{ m/s}$').",
+    "",
+    "## Section 8: Summary & Quick Reference Sheet",
+    "- A final Markdown table containing all Formulas, Units, and Key Rules.",
+    "- A 'One-Minute Review' bulleted list of the most vital takeaways.",
+    "",
+    "### TONE, STYLE, AND QUALITY:",
+    "- Tone: Academic yet conversational. Avoid 'dry' textbook language.",
+    "- Clarity: Use short sentences. Use bullet points heavily for scannability.",
+    "- Depth: Aim for 1500+ words. Elaborate on the 'How' and 'Why' rather than just stating facts.",
+    "- No Meta-Talk: Start immediately with the H1 title. Do not say 'Here is your guide'.",
+    "",
+    "=" * 60
+])
         
         return "\n".join(prompt_parts)
     

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import Header from '../components/Header'
-import TabNavigation from '../components/TabNavigation'
 import DocumentUpload from '../components/DocumentUpload'
 import DocumentList from '../components/DocumentList'
 import CreateChild from '../components/CreateChild'
@@ -10,6 +9,7 @@ import TestList from '../components/TestList'
 import TestListGrouped from '../components/TestListGrouped'
 import QuizPlayer from '../components/QuizPlayer'
 import EvaluationReport from '../components/EvaluationReport'
+import LearningWorkspace from '../components/LearningWorkspace'
 import { children, documents, child, isAuthError } from '../services/api'
 import { showNotification } from '../utils/notifications'
 
@@ -204,7 +204,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
     if (loading) {
       return (
         <div className="dashboard">
-          <Header user={user} onLogout={onLogout} />
+          <Header user={user} onLogout={onLogout} userProfile={user} />
           <div className="dashboard-content">
             <p className="loading-text">Loading...</p>
           </div>
@@ -221,15 +221,19 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
     
     return (
       <div className="dashboard">
-        <Header user={user} onLogout={onLogout} />
+        <Header 
+          user={user} 
+          onLogout={onLogout} 
+          tabs={adminTabs}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          userProfile={user}
+        />
         <div className="dashboard-content">
           <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>
             <button onClick={onNavigateToAdmin} className="btn-secondary">
               Admin Settings
             </button>
-          </div>
-          <div style={{ marginBottom: '1.5rem' }}>
-            <TabNavigation tabs={adminTabs} activeTab={activeTab} onTabChange={setActiveTab} />
           </div>
           
           <div className="tab-content">
@@ -488,7 +492,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
     if (loading) {
       return (
         <div className="dashboard">
-          <Header user={user} onLogout={onLogout} />
+          <Header user={user} onLogout={onLogout} userProfile={user} />
           <div className="dashboard-content">
             <p className="loading-text">Loading...</p>
           </div>
@@ -505,11 +509,15 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
 
     return (
       <div className="dashboard">
-        <Header user={user} onLogout={onLogout} />
+        <Header 
+          user={user} 
+          onLogout={onLogout}
+          tabs={childTabs}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          userProfile={childProfile || user}
+        />
         <div className="dashboard-content">
-          <div style={{ marginBottom: '1.5rem' }}>
-            <TabNavigation tabs={childTabs} activeTab={activeTab} onTabChange={setActiveTab} />
-          </div>
 
           <div className="tab-content">
             {activeTab === 'profile' && childProfile && (
@@ -583,10 +591,9 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
             )}
 
             {activeTab === 'reports' && (
-              <div className="dashboard-section">
-                <h2>My Evaluation Report</h2>
+              <div className="dashboard-section" style={{ padding: 0, height: '100vh', overflow: 'hidden' }}>
                 {childProfile ? (
-                  <EvaluationReport childId={childProfile.id} daysBack={30} showAllGuides={true} />
+                  <LearningWorkspace childId={childProfile.id} daysBack={30} showAllGuides={true} user={user} />
                 ) : (
                   <div className="empty-state">
                     <p>Loading profile...</p>
@@ -716,11 +723,15 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
   // Parent dashboard with tabs - ensure tabs are always shown
   return (
     <div className="dashboard">
-      <Header user={user} onLogout={onLogout} />
+      <Header
+        user={user} 
+        onLogout={onLogout}
+        tabs={tabs}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        userProfile={user}
+      />
       <div className="dashboard-content">
-        <div style={{ marginBottom: '1.5rem' }}>
-          <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
-        </div>
 
         <div className="tab-content">
           {activeTab === 'overview' && (
@@ -886,14 +897,14 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
           )}
 
           {activeTab === 'reports' && (
-            <div className="dashboard-section">
+            <div className="dashboard-section" style={{ padding: 0, height: '100vh', overflow: 'hidden' }}>
               {!selectedChild && childList.length > 0 && (
                 <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
                   Please select a child to view their evaluation report.
                 </p>
               )}
               {selectedChild ? (
-                <EvaluationReport childId={selectedChild} daysBack={30} showAllGuides={true} />
+                <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} />
               ) : childList.length === 0 ? (
                 <div className="empty-state">
                   <p>Create a child profile first to view evaluation reports.</p>

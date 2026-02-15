@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { tests } from '../services/api'
 import LoadingSpinner from './LoadingSpinner'
@@ -6,12 +6,18 @@ import MathText from './MathText'
 import RevisionCard from './RevisionCard'
 import { showNotification } from '../utils/notifications'
 
-export default function StudyGuide({ guideId, onClose }) {
+export default function StudyGuide({ 
+  guideId, 
+  onClose,
+  contextPayload = null,
+  onNavigateToCards = null
+}) {
   const [guide, setGuide] = useState(null)
   const [loading, setLoading] = useState(true)
   const [regenerating, setRegenerating] = useState(false)
   const [currentCardIndex, setCurrentCardIndex] = useState(0)
   const [showRevisionCards, setShowRevisionCards] = useState(false)
+  const contentRef = useRef(null)
 
   useEffect(() => {
     loadGuide()
@@ -315,11 +321,54 @@ export default function StudyGuide({ guideId, onClose }) {
     }
   }, [revisionCards.length, currentCardIndex])
 
+  // Auto-scroll to relevant section when context is provided
+  useEffect(() => {
+    if (contextPayload?.relatedError && guide && contentRef.current) {
+      const errorType = contextPayload.relatedError.errorType
+      
+      // Map error types to section IDs
+      const sectionMap = {
+        'Conceptual': 'section-5', // Common Errors section
+        'Arithmetic': 'section-4', // Examples section
+        'Procedural': 'section-3', // Problem-Solving Method
+      }
+      
+      const targetId = sectionMap[errorType] || 'section-5'
+      
+      // Wait for content to render, then scroll
+      setTimeout(() => {
+        const element = document.getElementById(targetId) || 
+                       contentRef.current?.querySelector(`#${targetId}`) ||
+                       contentRef.current?.querySelector(`[id*="${targetId}"]`)
+        
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          // Highlight the section temporarily
+          const originalBg = element.style.background
+          element.style.background = 'rgba(255, 193, 7, 0.1)'
+          element.style.transition = 'background 0.3s'
+          setTimeout(() => {
+            element.style.background = originalBg
+          }, 3000)
+        }
+      }, 500)
+    }
+  }, [guide, contextPayload])
+
   if (loading) return <LoadingSpinner />
   if (!guide) return <div>Study guide not found</div>
 
+  // Helper function to extract text from React children
+  const extractText = (node) => {
+    if (typeof node === 'string') return node
+    if (typeof node === 'number') return String(node)
+    if (Array.isArray(node)) return node.map(extractText).join('')
+    if (node?.props?.children) return extractText(node.props.children)
+    return ''
+  }
+
   return (
-    <div style={{ padding: '2rem', maxWidth: '900px', margin: '0 auto' }}>
+    <div ref={contentRef} style={{ padding: '2rem', maxWidth: '900px', margin: '0 auto' }}>
       {onClose && (
         <button 
           onClick={onClose} 
@@ -329,88 +378,35 @@ export default function StudyGuide({ guideId, onClose }) {
           ← Back
         </button>
       )}
-      
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ flex: 1 }}>
-          <h1 style={{ 
-            margin: 0, 
-            marginBottom: '0.75rem',
-            fontSize: '2rem',
-            fontWeight: '700',
-            color: 'var(--primary-color)',
-            borderBottom: '3px solid var(--primary-color)',
-            paddingBottom: '0.75rem'
-          }}>
-            {guide.concept_name}
-          </h1>
-          <div style={{ 
-            color: 'var(--text-muted)', 
-            marginTop: '0.5rem',
-            fontSize: '0.95rem',
-            display: 'flex',
-            gap: '1rem',
-            flexWrap: 'wrap'
-          }}>
-            <span style={{ 
-              background: 'var(--bg-secondary)', 
-              padding: '0.25rem 0.75rem', 
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-color)'
-            }}>
-              Focus: {guide.focus_area}
-            </span>
-            {guide.generated_at && (() => {
-              // Ensure UTC timestamps are properly parsed
-              let dateStr = guide.generated_at
-              if (!dateStr.includes('Z') && !dateStr.match(/[+-]\d{2}:\d{2}$/)) {
-                // Add 'Z' to indicate UTC if not present
-                dateStr = dateStr.endsWith('Z') ? dateStr : dateStr + 'Z'
-              }
-              const date = new Date(dateStr)
-              return (
-                <span style={{ 
-                  background: 'var(--bg-secondary)', 
-                  padding: '0.25rem 0.75rem', 
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-color)'
-                }}>
-                  Created: {date.toLocaleString(undefined, {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    timeZoneName: 'short'
-                  })}
-                </span>
-              )
-            })()}
+
+      {/* Contextual Header */}
+      {contextPayload && (
+        <div style={{
+          padding: '1rem',
+          background: 'var(--primary-color-light)',
+          borderRadius: 'var(--radius-md)',
+          marginBottom: '1.5rem',
+          border: '1px solid var(--primary-color)'
+        }}>
+          <div style={{ fontWeight: '600', marginBottom: '0.5rem' }}>
+            Focus: {contextPayload.activeTopic}
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <button
-            onClick={handleRegenerate}
-            className="btn-secondary"
-            disabled={regenerating}
-            style={{ padding: '0.75rem 1.5rem' }}
-            title="Regenerate study guide with latest data"
-          >
-            {regenerating ? 'Regenerating...' : 'Refresh'}
-          </button>
-          {revisionCards.length > 0 && (
-            <button
-              onClick={() => setShowRevisionCards(!showRevisionCards)}
-              className="btn-primary"
-              style={{ padding: '0.75rem 1.5rem' }}
-            >
-              {showRevisionCards ? 'View Guide' : 'Revision Cards'}
-            </button>
+          {contextPayload.relatedError && (
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+              Error Type: {contextPayload.relatedError.errorType}
+              {contextPayload.relatedError.misconceptions?.length > 0 && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  Misconceptions: {contextPayload.relatedError.misconceptions.join(', ')}
+                </div>
+              )}
+            </div>
           )}
         </div>
-      </div>
+      )}
+      
 
-      {/* Revision Cards Section */}
-      {showRevisionCards && revisionCards.length > 0 && (() => {
+      {/* Revision Cards Section - Removed (now handled by LearningDrawer tabs) */}
+      {false && showRevisionCards && revisionCards.length > 0 && (() => {
         // Ensure currentCardIndex is within bounds
         const safeIndex = Math.max(0, Math.min(currentCardIndex, revisionCards.length - 1))
         const currentCard = revisionCards[safeIndex]
@@ -573,32 +569,45 @@ export default function StudyGuide({ guideId, onClose }) {
             },
             // eslint-disable-next-line react/prop-types
             h2: ({ children }) => {
-              const extractText = (node) => {
-                if (typeof node === 'string') return node
-                if (typeof node === 'number') return String(node)
-                if (Array.isArray(node)) return node.map(extractText).join('')
-                if (node?.props?.children) return extractText(node.props.children)
-                return ''
-              }
               const text = extractText(children)
+              // Generate ID from heading text for auto-scroll
+              const id = text.toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, '')
+              
+              // Map section names to IDs for error-based navigation
+              let sectionId = id
+              if (text.toLowerCase().includes('common error') || text.toLowerCase().includes('error')) {
+                sectionId = 'section-5'
+              } else if (text.toLowerCase().includes('example') || text.toLowerCase().includes('worked')) {
+                sectionId = 'section-4'
+              } else if (text.toLowerCase().includes('problem-solving') || text.toLowerCase().includes('method')) {
+                sectionId = 'section-3'
+              } else {
+                sectionId = `section-${id}`
+              }
+              
               return (
-                <h2 style={{ 
-                  fontSize: '1.875rem', 
-                  marginTop: '2.5rem', 
-                  marginBottom: '1.25rem', 
-                  fontWeight: '700',
-                  color: 'var(--primary-color)',
-                  borderLeft: '5px solid var(--primary-color)',
-                  paddingLeft: '1.25rem',
-                  paddingTop: '0.75rem',
-                  paddingBottom: '0.75rem',
-                  paddingRight: '1rem',
-                  background: 'linear-gradient(to right, var(--primary-color-light) 0%, rgba(255,255,255,0.1) 50%, transparent 100%)',
-                  borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
-                  boxShadow: '0 2px 4px rgba(0, 0, 0, 0.08)',
-                  lineHeight: 1.3,
-                  letterSpacing: '-0.01em'
-                }}>
+                <h2 
+                  id={sectionId}
+                  style={{ 
+                    fontSize: '1.875rem', 
+                    marginTop: '2.5rem', 
+                    marginBottom: '1.25rem', 
+                    fontWeight: '700',
+                    color: 'var(--primary-color)',
+                    borderLeft: '5px solid var(--primary-color)',
+                    paddingLeft: '1.25rem',
+                    paddingTop: '0.75rem',
+                    paddingBottom: '0.75rem',
+                    paddingRight: '1rem',
+                    background: 'linear-gradient(to right, var(--primary-color-light) 0%, rgba(255,255,255,0.1) 50%, transparent 100%)',
+                    borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.08)',
+                    lineHeight: 1.3,
+                    letterSpacing: '-0.01em'
+                  }}
+                >
                   <MathText text={text} inline={false} />
                 </h2>
               )

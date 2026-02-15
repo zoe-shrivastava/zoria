@@ -24,37 +24,154 @@ export default function RevisionCard({
   const normalizeLaTeX = (text, isBack = false) => {
     if (!text || typeof text !== 'string') return text
     
-    // First, handle cases where backslashes were lost during JSON parsing
-    // If we see patterns like "ext{" or "ext " that should be "\text{", fix them
-    // But be careful not to break valid text
+    // CRITICAL: Protect display math blocks ($$...$$) first to prevent breaking them
+    const displayMathBlocks = []
+    let protectedText = text
+    let mathIndex = 0
+    
+    // Extract and protect display math blocks
+    protectedText = protectedText.replace(/\$\$[\s\S]*?\$\$/g, (match) => {
+      const placeholder = `__DISPLAY_MATH_${mathIndex}__`
+      displayMathBlocks.push({ placeholder, content: match })
+      mathIndex++
+      return placeholder
+    })
+    
+    // CRITICAL: Fix \frac\frac (double fraction) FIRST - convert to single \frac
+    // This must happen before any other processing
+    let normalized = protectedText.replace(/\\frac\\frac/g, '\\frac')
+    
+    // CRITICAL: Fix \f\frac -> \frac (when \f is left before \frac)
+    // This happens when \frac lost its \f part, leaving \f, then \frac was added
+    normalized = normalized.replace(/\\f\\frac/g, '\\frac')
+    
+    // CRITICAL: Fix \fracrac patterns FIRST (before form feed handling)
+    // This handles cases where \frac lost \f, became rac{, and we incorrectly added \frac
+    normalized = normalized.replace(/\\fracrac\{/g, '\\frac{')
+    normalized = normalized.replace(/\\fracrac/g, '\\frac')
+    
+    // CRITICAL: Fix form feed characters - these are \f in Python strings that became \u000C
+    // The pattern \f\f suggests \frac where the 'rac' parts were lost
+    
+    // Pattern: \f\f followed by {anything}{anything} -> \frac{anything}{anything}
+    // This handles \frac{v-u}{t} that became \f\f{v-u}{t}
+    normalized = normalized.replace(/\\f\\f\{([^}]+)\}\{([^}]+)\}/g, '\\frac{$1}{$2}')
+    
+    // Pattern: \f\f followed by {digit}{digit} -> \frac{digit}{digit}
+    // This handles \frac{1}{2} that became \f\f{1}{2}
+    normalized = normalized.replace(/\\f\\f\{(\d+)\}\{(\d+)\}/g, '\\frac{$1}{$2}')
+    
+    // Pattern: \f\f followed by {digit or { -> \frac{ (most common: \frac{1} or \frac{2})
+    normalized = normalized.replace(/\\f\\f\{(\d+)\}/g, '\\frac{$1}')
+    
+    // Pattern: \f\f in math context (like E=\f\f) -> \frac
+    // This handles cases where \frac{1}{2} became \f\f{1}{2}
+    normalized = normalized.replace(/([=\[\(])\\f\\f([\d\{])/g, '$1\\frac{$2')
+    normalized = normalized.replace(/\\f\\f([\d\{])/g, '\\frac{$1')
+    
+    // CRITICAL: Fix \t (tab) characters that appear in \text{...}
+    // When \text{ becomes \t + ext{ or \t + \text{, we need to fix it
+    // Handle both escape sequence \t and literal tab character (0x09)
+    
+    // Pattern: \t followed by ext{ -> \text{ (without backslash before ext)
+    normalized = normalized.replace(/\\t(ext\{)/g, '\\text{')
+    normalized = normalized.replace(/\\t\s*ext\{/g, '\\text{')
+    normalized = normalized.replace(/\t(ext\{)/g, '\\text{')
+    normalized = normalized.replace(/\t\s*ext\{/g, '\\text{')
+    
+    // Pattern: \t followed by \text{ -> \text{ (with backslash before text)
+    // This handles cases where \text{ became \t\text{
+    normalized = normalized.replace(/\\t\\text\{/g, '\\text{')
+    normalized = normalized.replace(/\\t\s*\\text\{/g, '\\text{')
+    normalized = normalized.replace(/\t\\text\{/g, '\\text{')
+    normalized = normalized.replace(/\t\s*\\text\{/g, '\\text{')
+    
+    // More aggressive: remove \t anywhere it appears before text commands
+    normalized = normalized.replace(/\\t\s*\\text/g, '\\text')
+    normalized = normalized.replace(/\t\s*\\text/g, '\\text')
+    
+    // Pattern: \t in math context where it should be part of \text
+    // Handle cases like: $u = 0 \t\text{ m/s}$ -> $u = 0 \text{ m/s}$
+    normalized = normalized.replace(/(\d+)\s*\\t\s*ext\{([^}]+)\}/g, '$1 \\text{$2}')
+    normalized = normalized.replace(/(\d+)\s*\t\s*ext\{([^}]+)\}/g, '$1 \\text{$2}')
+    normalized = normalized.replace(/(\d+)\s*\\t\s*\\text\{([^}]+)\}/g, '$1 \\text{$2}')
+    normalized = normalized.replace(/(\d+)\s*\t\s*\\text\{([^}]+)\}/g, '$1 \\text{$2}')
+    
+    // More aggressive: fix \t\text{ anywhere in math mode
+    normalized = normalized.replace(/\$([^$]*?)\\t\s*ext\{([^}]+)\}([^$]*?)\$/g, '$$1\\text{$2}$3$')
+    normalized = normalized.replace(/\$([^$]*?)\t\s*ext\{([^}]+)\}([^$]*?)\$/g, '$$1\\text{$2}$3$')
+    normalized = normalized.replace(/\$([^$]*?)\\t\s*\\text\{([^}]+)\}([^$]*?)\$/g, '$$1\\text{$2}$3$')
+    normalized = normalized.replace(/\$([^$]*?)\t\s*\\text\{([^}]+)\}([^$]*?)\$/g, '$$1\\text{$2}$3$')
+    
+    // Also handle display math $$...$$
+    // Note: In replacement strings, $$ = literal $, so $$$1 = $$ + $1 (backreference)
+    normalized = normalized.replace(/\$\$([\s\S]*?)\\t\s*ext\{([^}]+)\}([\s\S]*?)\$\$/g, '$$$1\\text{$2}$3$$')
+    normalized = normalized.replace(/\$\$([\s\S]*?)\t\s*ext\{([^}]+)\}([\s\S]*?)\$\$/g, '$$$1\\text{$2}$3$$')
+    normalized = normalized.replace(/\$\$([\s\S]*?)\\t\s*\\text\{([^}]+)\}([\s\S]*?)\$\$/g, '$$$1\\text{$2}$3$$')
+    normalized = normalized.replace(/\$\$([\s\S]*?)\t\s*\\text\{([^}]+)\}([\s\S]*?)\$\$/g, '$$$1\\text{$2}$3$$')
+    
+    // Note: \frac\frac fix is already done at the beginning
+    
+    // Pattern: \f\f (standalone, anywhere) -> \frac
+    // This is a catch-all for \f\f patterns that don't match above
+    normalized = normalized.replace(/\\f\\f/g, '\\frac')
+    
+    // Pattern: \f followed by {digit or { -> \frac{ (single \f case)
+    normalized = normalized.replace(/\\f\{(\d+)\}/g, '\\frac{$1}')
+    normalized = normalized.replace(/\\f([\d\{])/g, '\\frac{$1}')
+    
+    // Pattern: \f (standalone in math context) -> \frac
+    // Only replace if it's clearly in a math expression
+    normalized = normalized.replace(/([=\[\(,\s])\\f([\d\{])/g, '$1\\frac{$2')
+    
+    // Pattern: form feed character (Unicode \u000C) followed by "rac" -> "\frac"
+    normalized = normalized.replace(/\u000Crac/g, '\\frac')
+    
+    // Pattern: multiple form feeds (like \u000C\u000C) - likely \frac (NOT \frac\frac)
+    normalized = normalized.replace(/\u000C\u000C/g, '\\frac')
+    normalized = normalized.replace(/\u000C\u000C\{(\d+)\}/g, '\\frac{$1}')
+    
+    // Pattern: form feed followed by "rac{" -> "\frac{"
+    normalized = normalized.replace(/\u000Crac\{/g, '\\frac{')
+    
+    // Pattern: form feed followed by any lowercase LaTeX command -> "\command"
+    normalized = normalized.replace(/\u000C([a-z]+)/g, '\\$1')
+    
+    // Pattern: form feed before backslash (like "\u000C\frac" -> "\frac")
+    normalized = normalized.replace(/\u000C\\/g, '\\')
+    
+    // Pattern: standalone form feed in math context (likely \frac) -> \frac
+    normalized = normalized.replace(/([=\(\[\{,\s])\u000C([\d\{])/g, '$1\\frac{$2')
+    
+    // Remove remaining standalone form feed characters (not part of a command)
+    normalized = normalized.replace(/\u000C(?!\w)/g, '')
+    
+    // Now normalize over-escaped backslashes (similar to MathText component)
+    // This handles double-escaping that can occur in JSON serialization
+    // Replace 4+ consecutive backslashes with 2 backslashes
+    normalized = normalized.replace(/(\\\\){2,}/g, '\\\\')
     
     // Fix missing backslashes before LaTeX commands
     // Pattern: "ext{" should be "\text{" (when not already escaped)
     // Also handle cases where backslash was lost: "text{" -> "\text{"
-    let normalized = text.replace(/([^\\])ext\{/g, '$1\\text{')
+    normalized = normalized.replace(/([^\\])ext\{/g, '$1\\text{')
     normalized = normalized.replace(/^ext\{/g, '\\text{')
     normalized = normalized.replace(/([^\\])text\{/g, '$1\\text{')
     normalized = normalized.replace(/^text\{/g, '\\text{')
     
     // Fix "rac{" -> "\frac{" (when \frac lost its backslash and became form feed + "rac")
-    // Also handle direct "rac{" pattern
-    normalized = normalized.replace(/([^\\])rac\{/g, '$1\\frac{')
+    // CRITICAL: Fix \fracrac{ FIRST before fixing rac{ patterns
+    // This handles cases where \frac lost \f, became rac{, and we incorrectly added \frac
+    normalized = normalized.replace(/\\fracrac\{/g, '\\frac{')
+    normalized = normalized.replace(/\\fracrac/g, '\\frac')
+    
+    // Then fix standalone rac{ patterns (but not if it's part of \fracrac)
+    // Pattern: rac{ at start of string or after non-backslash, non-f character
+    normalized = normalized.replace(/([^\\f])rac\{/g, '$1\\frac{')
     normalized = normalized.replace(/^rac\{/g, '\\frac{')
     
-    // Fix form feed character (0x0C) - this happens when Python interprets \f as form feed
-    // Pattern: form feed followed by "rac" -> "\frac"
-    normalized = normalized.replace(/\u000Crac/g, '\\frac')
-    
-    // Also fix form feed followed by any LaTeX-like command pattern (lowercase commands)
-    normalized = normalized.replace(/\u000C([a-z]+)/g, '\\$1')
-    
-    // Fix form feed before backslash (like "\u000C\frac" -> "\frac")
-    normalized = normalized.replace(/\u000C\\/g, '\\')
-    
-    // Remove standalone form feed characters (not part of a command)
-    normalized = normalized.replace(/\u000C(?!\w)/g, '')
-    
-    // Don't replace \frac - it's already correct. Only fix "rac" without backslash
+    // Also handle rac{ that might appear after spaces or other characters
+    normalized = normalized.replace(/\s+rac\{/g, ' \\frac{')
     
     // Fix broken LaTeX patterns where \text lost its backslash
     // Pattern: "10.0extm" -> "10.0 \text{m}"
@@ -77,14 +194,6 @@ export default function RevisionCard({
     // Fix pattern: "vx=20.0extms" -> "v_x=20.0 \text{ms}"
     normalized = normalized.replace(/([a-zA-Z])([xyz])\s*=\s*(\d+\.?\d*)\s*ext([a-zA-Z]+)/g, '$1_$2 = $3 \\text{$4}')
     
-    // Now fix over-escaping (iteratively replace \\\\ with \\ until no more changes)
-    let previous = ''
-    while (normalized !== previous) {
-      previous = normalized
-      // Replace 4+ backslashes with 2 backslashes (for LaTeX commands)
-      normalized = normalized.replace(/\\\\\\+/g, '\\\\')
-    }
-    
     // Fix subscript patterns like "vx" where it should be "v_x" (but be conservative)
     // Only fix if it's clearly a physics variable pattern (vx, vy, ax, ay, etc.)
     const physicsVars = ['vx', 'vy', 'vz', 'ax', 'ay', 'az', 'ux', 'uy', 'uz']
@@ -97,20 +206,54 @@ export default function RevisionCard({
     // Look for patterns like "=10.0extm" or "=10.0 extm"
     normalized = normalized.replace(/=\s*(\d+\.?\d*)\s*ext([a-zA-Z])/g, '= $1 \\text{$2}')
     
+    // Restore display math blocks that were protected at the beginning
+    // But first normalize them for \t and \frac\frac issues
+    displayMathBlocks.forEach(({ placeholder, content }) => {
+      let normalizedContent = content
+      // Fix \frac\frac in display math
+      normalizedContent = normalizedContent.replace(/\\frac\\frac/g, '\\frac')
+      // Fix \t issues in display math
+      normalizedContent = normalizedContent.replace(/\\t(ext\{)/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\\t\s*ext\{/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\t(ext\{)/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\t\s*ext\{/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\\t\\text\{/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\\t\s*\\text\{/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\t\\text\{/g, '\\text{')
+      normalizedContent = normalizedContent.replace(/\t\s*\\text\{/g, '\\text{')
+      normalized = normalized.replace(placeholder, normalizedContent)
+    })
+    
     // For back content, convert newlines to <br> tags for proper HTML rendering
     // But preserve newlines in LaTeX math blocks (between $...$ or $$...$$)
     if (isBack) {
-      // Split by math delimiters to preserve newlines inside math
-      const parts = normalized.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/)
-      const processedParts = parts.map((part, idx) => {
-        // If this part is a math expression, keep it as is
-        if (part.match(/^\$\$[\s\S]*?\$\$$/) || part.match(/^\$[^$\n]+?\$$/)) {
-          return part
-        }
-        // Otherwise, convert newlines to <br>
-        return part.replace(/\n/g, '<br>')
+      // First, extract and protect all math expressions (including the restored display math)
+      const mathExpressions = []
+      let mathIndex = 0
+      
+      // Extract display math ($$...$$) - these can contain newlines
+      normalized = normalized.replace(/\$\$[\s\S]*?\$\$/g, (match) => {
+        const placeholder = `__MATH_DISPLAY_${mathIndex}__`
+        mathExpressions.push({ placeholder, content: match })
+        mathIndex++
+        return placeholder
       })
-      normalized = processedParts.join('')
+      
+      // Extract inline math ($...$) - these should not contain newlines
+      normalized = normalized.replace(/\$[^$\n]+?\$/g, (match) => {
+        const placeholder = `__MATH_INLINE_${mathIndex}__`
+        mathExpressions.push({ placeholder, content: match })
+        mathIndex++
+        return placeholder
+      })
+      
+      // Now convert newlines to <br> in the non-math parts
+      normalized = normalized.replace(/\n/g, '<br>')
+      
+      // Restore math expressions
+      mathExpressions.forEach(({ placeholder, content }) => {
+        normalized = normalized.replace(placeholder, content)
+      })
     }
     
     return normalized

@@ -229,11 +229,48 @@ export default function MathText({ text, inline = false }) {
       // Handles cases where backslashes were double-escaped during storage/transmission
       // e.g., \\\\text{m/s} -> \\text{m/s} (which will render correctly as \text{m/s})
       const normalizeLaTeXEscaping = (latexText) => {
+        // CRITICAL: Fix \frac\frac (double fraction) FIRST - convert to single \frac
+        let normalized = latexText.replace(/\\frac\\frac/g, '\\frac')
+        
+        // CRITICAL: Fix \f\frac -> \frac (when \f is left before \frac)
+        normalized = normalized.replace(/\\f\\frac/g, '\\frac')
+        
+        // CRITICAL: Fix \fracrac patterns (when \frac lost \f and we added \frac before rac)
+        normalized = normalized.replace(/\\fracrac\{/g, '\\frac{')
+        normalized = normalized.replace(/\\fracrac/g, '\\frac')
+        
+        // CRITICAL: Fix \t (tab) characters that appear in \text{...}
+        // Pattern: \t followed by ext{ -> \text{ (without backslash before ext)
+        normalized = normalized.replace(/\\t(ext\{)/g, '\\text{')
+        normalized = normalized.replace(/\\t\s*ext\{/g, '\\text{')
+        normalized = normalized.replace(/\t(ext\{)/g, '\\text{')
+        normalized = normalized.replace(/\t\s*ext\{/g, '\\text{')
+        
+        // Pattern: \t followed by \text{ -> \text{ (with backslash before text)
+        // This handles cases where \text{ became \t\text{
+        normalized = normalized.replace(/\\t\\text\{/g, '\\text{')
+        normalized = normalized.replace(/\\t\s*\\text\{/g, '\\text{')
+        normalized = normalized.replace(/\t\\text\{/g, '\\text{')
+        normalized = normalized.replace(/\t\s*\\text\{/g, '\\text{')
+        
+        // More aggressive: remove \t anywhere it appears before text commands
+        normalized = normalized.replace(/\\t\s*\\text/g, '\\text')
+        normalized = normalized.replace(/\t\s*\\text/g, '\\text')
+        
+        // Fix \f\f patterns -> \frac
+        normalized = normalized.replace(/\\f\\f\{([^}]+)\}\{([^}]+)\}/g, '\\frac{$1}{$2}')
+        normalized = normalized.replace(/\\f\\f\{(\d+)\}\{(\d+)\}/g, '\\frac{$1}{$2}')
+        normalized = normalized.replace(/\\f\\f\{(\d+)\}/g, '\\frac{$1}')
+        normalized = normalized.replace(/\\f\\f([\d\{])/g, '\\frac{$1}')
+        normalized = normalized.replace(/\\f\\f/g, '\\frac')
+        
         // Replace 4+ consecutive backslashes with 2 backslashes
         // This handles double-escaping that can occur in JSON serialization
         // Pattern: \\\\ (4 backslashes) or more -> \\ (2 backslashes)
         // Match 4 or more backslashes and replace with exactly 2
-        return latexText.replace(/(\\\\){2,}/g, '\\\\')
+        normalized = normalized.replace(/(\\\\){2,}/g, '\\\\')
+        
+        return normalized
       }
       
       // Extract display math patterns first ($$...$$, \[...\], \(...\))
