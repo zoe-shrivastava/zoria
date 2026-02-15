@@ -145,7 +145,7 @@ export default function Header({ user, onLogout, tabs = null, activeTab = null, 
                 borderRadius: 'var(--radius-md)',
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
                 minWidth: '200px',
-                zIndex: 1000,
+                zIndex: 1100,
                 padding: '1rem'
               }}>
                 <div style={{ marginBottom: '0.75rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)' }}>

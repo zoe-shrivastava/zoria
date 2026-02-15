@@ -9,7 +9,8 @@ from schemas.auth import (
     CompleteMFASetupRequest
 )
 from services.auth_service import AuthService
-from core.dependencies import get_current_user
+from core.dependencies import get_current_user, get_database
+from core.database import Database
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -106,12 +107,30 @@ async def complete_mfa_setup(request: CompleteMFASetupRequest):
 
 
 @router.get("/me")
-async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+async def get_current_user_info(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_database)
+):
     """Get current authenticated user information.
     
     GET /api/v1/auth/me
+    Enriches parent/admin with email from DB so the frontend always has a display name
+    (covers old JWTs that did not include email).
     """
+    role = current_user.get("role")
+    user = dict(current_user)
+
+    if role in ("parent", "admin") and not user.get("email"):
+        parent_id = current_user.get("parent_id")
+        if parent_id:
+            from database.repositories.user_repository import UserRepository
+            user_repo = UserRepository(db)
+            parent = await user_repo.get_parent_by_id(str(parent_id))
+            if parent and parent.get("email"):
+                user["email"] = parent["email"]
+                user["id"] = str(parent["id"])
+
     return {
-        "user": current_user,
-        "role": current_user.get("role")
+        "user": user,
+        "role": role
     }

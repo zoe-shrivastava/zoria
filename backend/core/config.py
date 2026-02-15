@@ -52,6 +52,9 @@ class Settings:
     # Ollama (optional)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     USE_OLLAMA_EMBEDDINGS: bool = os.getenv("USE_OLLAMA_EMBEDDINGS", "false").lower() == "true"
+
+    # Question generation: model for generating quiz questions (e.g. "gpt-5-nano" or "llama3.1")
+    QUESTION_GENERATION_MODEL: str = os.getenv("QUESTION_GENERATION_MODEL", "gpt-5-nano")
     
     @classmethod
     def ensure_upload_dir(cls) -> None:

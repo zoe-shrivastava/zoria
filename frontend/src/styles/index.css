@@ -543,6 +543,8 @@ body {
 
 /* Header */
 .header {
+  position: relative;
+  z-index: 1100;
   background: var(--bg-card);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-color);

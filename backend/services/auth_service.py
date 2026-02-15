@@ -174,7 +174,8 @@ class AuthService:
         role = parent.get("role", "parent")
         token = jwt_handler.generate_parent_token(
             parent_id=str(parent["id"]),
-            role=role
+            role=role,
+            email=parent.get("email")
         )
         token_time = time.time() - token_start
         logger.debug(f"Login: Token generation took {token_time:.3f}s")
@@ -303,7 +304,8 @@ class AuthService:
         role = parent.get("role", "parent")
         token = jwt_handler.generate_parent_token(
             parent_id=parent_id,
-            role=role
+            role=role,
+            email=parent.get("email")
         )
         
         return {

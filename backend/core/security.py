@@ -36,6 +36,7 @@ class JWTHandler:
         self,
         parent_id: str,
         role: str = "parent",
+        email: Optional[str] = None,
         expires_in_hours: Optional[int] = None
     ) -> str:
         """Generate parent JWT token.
@@ -43,6 +44,7 @@ class JWTHandler:
         Args:
             parent_id: Parent identifier (UUID)
             role: User role ('parent' or 'admin')
+            email: Parent email (for display name on frontend after refresh)
             expires_in_hours: Token expiration in hours (defaults to settings)
             
         Returns:
@@ -56,7 +58,9 @@ class JWTHandler:
             "exp": datetime.utcnow() + timedelta(hours=expires_in),
             "iat": datetime.utcnow()
         }
-        
+        if email:
+            payload["email"] = email
+
         return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
     
     def generate_child_token(

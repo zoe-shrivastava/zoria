@@ -239,6 +239,17 @@ export default function MathText({ text, inline = false }) {
         normalized = normalized.replace(/\\fracrac\{/g, '\\frac{')
         normalized = normalized.replace(/\\fracrac/g, '\\frac')
         
+        // CRITICAL: Fix form feed (\\f in JSON/LLM output became \u000C) - same as RevisionCard
+        // So "f(x) = \u000Crac{x}{x+1}" (ParseError: rac) -> "f(x) = \frac{x}{x+1}"
+        normalized = normalized.replace(/\u000Crac\{/g, '\\frac{')
+        normalized = normalized.replace(/\u000Crac/g, '\\frac')
+        normalized = normalized.replace(/\u000C\u000C/g, '\\frac')
+        normalized = normalized.replace(/\u000C\u000C\{(\d+)\}/g, '\\frac{$1}')
+        normalized = normalized.replace(/\u000C([a-z]+)/g, '\\$1')
+        normalized = normalized.replace(/\u000C\\/g, '\\')
+        normalized = normalized.replace(/([=\(\[\{,\s])\u000C([\d\{])/g, '$1\\frac{$2}')
+        normalized = normalized.replace(/\u000C(?!\w)/g, '')
+        
         // CRITICAL: Fix \t (tab) characters that appear in \text{...}
         // Pattern: \t followed by ext{ -> \text{ (without backslash before ext)
         normalized = normalized.replace(/\\t(ext\{)/g, '\\text{')
@@ -270,8 +281,23 @@ export default function MathText({ text, inline = false }) {
         // Match 4 or more backslashes and replace with exactly 2
         normalized = normalized.replace(/(\\\\){2,}/g, '\\\\')
         
+        // Fix standalone "ext{" -> "\text{" (lost backslash; e.g. " 	ext{Dollar}" in plain text)
+        // Only when preceded by start or whitespace/tab so we don't break "context{"
+        normalized = normalized.replace(/(^|[\s\t])ext\{/g, '$1\\text{')
+        
+        // Fix lost backslash before \lvert and \rvert (absolute value bars), e.g. "f(x) = -2 lvert x - 1 rvert - 1"
+        // No \b so "lvertx" and "rvert−1" match (word boundary would skip "lvert" when followed by "x")
+        normalized = normalized.replace(/(^|[^a-zA-Z\\])lvert/g, '$1\\lvert')
+        normalized = normalized.replace(/(^|[^a-zA-Z\\])rvert/g, '$1\\rvert')
+        
         return normalized
       }
+      
+      // Normalize the entire text first so content outside $...$ (e.g. " 	ext{Dollar}") is also fixed
+      processedText = normalizeLaTeXEscaping(processedText)
+      
+      // Merge "$...$ \text{...}" into "$... \text{...}$" so \text{} is inside math mode and KaTeX renders it
+      processedText = processedText.replace(/\$([^$]+)\$\s*\\text\{([^}]+)\}/g, (_, math, textContent) => `$${math} \\text{${textContent}}$`)
       
       // Extract display math patterns first ($$...$$, \[...\], \(...\))
       const displayPatterns = [

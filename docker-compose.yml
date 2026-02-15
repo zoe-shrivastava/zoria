@@ -24,10 +24,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: zoria-backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql://zoria:zoria_password@postgres:5432/zoria
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      # Optional: set in .env to "llama3.1" to use Ollama for question generation (default: gpt-5-nano)
+      QUESTION_GENERATION_MODEL: ${QUESTION_GENERATION_MODEL:-gpt-5-nano}
     ports:
       - "8001:8000"
     volumes:

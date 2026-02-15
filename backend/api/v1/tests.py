@@ -24,6 +24,7 @@ from services.embedding_service import EmbeddingService
 from services.llm_service import LLMService
 from subject_config import get_subject_profile, get_all_subject_ids, normalize_subject_name, get_subject_display_name
 from core.dependencies import get_current_user, get_current_child, get_current_parent, get_database
+from core.config import settings
 from core.background_tasks import (
     enqueue_test_generation_from_concept,
     enqueue_test_generation_from_topics,
@@ -48,19 +49,19 @@ def get_embedding_service() -> EmbeddingService:
 
 
 def get_llm_service() -> LLMService:
-    """Dependency to get LLM service for question generation."""
-    # Use OpenAI GPT-5-nano for question generation
+    """Dependency to get LLM service for question generation (model via QUESTION_GENERATION_MODEL)."""
+    model = settings.QUESTION_GENERATION_MODEL
+    logger.info("Question generation using model: %s", model)
     try:
         from core.database import get_db
         return LLMService(
-            model_name="gpt-5-nano",
+            model_name=model,
             enable_logging=True,
             context_source="question_generation"
         )
     except Exception:
-        # Fallback if database not available
         return LLMService(
-            model_name="gpt-5-nano",
+            model_name=model,
             enable_logging=False,
             context_source="question_generation"
         )

@@ -6,6 +6,8 @@ from typing import Callable, Any, Optional
 from functools import wraps
 from datetime import datetime
 
+from core.config import settings
+
 logger = logging.getLogger(__name__)
 
 # Global task registry
@@ -235,7 +237,7 @@ async def enqueue_test_generation_from_concept(
             db = get_db()
             embedding_service = EmbeddingService()
             llm_service = LLMService(
-                model_name="gpt-5-nano",
+                model_name=settings.QUESTION_GENERATION_MODEL,
                 enable_logging=True,
                 context_source="question_generation"
             )
@@ -314,7 +316,7 @@ async def enqueue_test_generation_from_topics(
             db = get_db()
             embedding_service = EmbeddingService()
             llm_service = LLMService(
-                model_name="gpt-5-nano",
+                model_name=settings.QUESTION_GENERATION_MODEL,
                 enable_logging=True,
                 context_source="question_generation"
             )

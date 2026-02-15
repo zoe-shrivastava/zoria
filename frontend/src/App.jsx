@@ -21,25 +21,49 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    if (token) {
+    if (!token) {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    const initFromToken = async () => {
       try {
         const payload = JSON.parse(atob(token.split('.')[1]))
-        if (payload.role) {
-          setIsAdmin(payload.role === 'admin')
-          setUser({ 
-            email: payload.email || payload.user_id, 
-            role: payload.role, 
-            id: payload.user_id || payload.child_id || payload.parent_id,
-            name: payload.name || payload.child_name
-          })
-          setIsAuthenticated(true)
+        if (!payload.role) {
+          setLoading(false)
+          return
+        }
+        setIsAdmin(payload.role === 'admin')
+        setUser({
+          email: payload.email || payload.user_id,
+          role: payload.role,
+          id: payload.user_id || payload.child_id || payload.parent_id,
+          name: payload.name || payload.child_name || payload.email
+        })
+        setIsAuthenticated(true)
+        // Hydrate user from /auth/me so parent/admin always get email (covers old tokens without email in JWT)
+        try {
+          const me = await auth.getMe()
+          if (!cancelled && me?.user) {
+            const u = me.user
+            setUser({
+              ...u,
+              id: u.id || payload.user_id || payload.child_id || payload.parent_id,
+              name: u.name || u.child_name || u.email
+            })
+          }
+        } catch (_) {
+          // Keep user from token if /me fails (e.g. network)
         }
       } catch (e) {
         localStorage.removeItem('token')
         sessionStorage.removeItem('token')
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
-    setLoading(false)
+    initFromToken()
+    return () => { cancelled = true }
   }, [])
 
   const handleLogin = async (token, userData) => {
