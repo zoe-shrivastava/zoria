@@ -49,7 +49,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
         loadDocumentCount()
       }
     }
-    if (activeTab === 'tests' && isChild) {
+    if (activeTab === 'tests' && (isParent || isChild || isAdmin)) {
       loadTestCount()
     }
   }, [activeTab, selectedChild, isParent, isChild, isAdmin, childList.length])
@@ -150,6 +150,25 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
           const testsArray = Array.isArray(testData.tests) ? testData.tests : []
           setTestCount(testsArray.length)
         }
+      } else if (isAdmin) {
+        const { tests } = await import('../services/api')
+        const grouped = await tests.listAllGrouped()
+        const groups = grouped && typeof grouped === 'object' ? Object.values(grouped) : []
+        const total = groups.reduce((sum, g) => sum + (Array.isArray(g?.tests) ? g.tests.length : (g?.total || 0)), 0)
+        setTestCount(total)
+      } else if (isParent && childList.length > 0) {
+        const { tests } = await import('../services/api')
+        let totalCount = 0
+        for (const ch of childList) {
+          try {
+            const testData = await tests.list(ch.id)
+            const arr = Array.isArray(testData.tests) ? testData.tests : []
+            totalCount += arr.length
+          } catch (err) {
+            console.error(`Failed to load tests for child ${ch.id}:`, err)
+          }
+        }
+        setTestCount(totalCount)
       }
     } catch (error) {
       if (!isAuthError(error)) {
@@ -193,7 +212,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
   }
 
   const handleTestListRefresh = () => {
-    if (isChild) {
+    if (isChild || isParent || isAdmin) {
       loadTestCount()
     }
     setTestListRefreshKey(prev => prev + 1)
@@ -389,7 +408,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       </p>
                     ) : selectedChild ? (
                       <>
-                        {!isAdmin && (
+                        {!isAdmin && !isParent && (
                           <div style={{ marginBottom: '2rem' }}>
                             <TestLauncher
                               childId={selectedChild}
@@ -399,6 +418,19 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                                 showNotification('Test generated!', 'success')
                               }}
                             />
+                          </div>
+                        )}
+                        {isParent && (
+                          <div style={{
+                            marginBottom: '1rem',
+                            padding: '1rem',
+                            background: 'var(--bg-tertiary)',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-color)'
+                          }}>
+                            <p style={{ color: 'var(--text-muted)', margin: 0 }}>
+                              You can view all tests and evaluation reports (including cards). Only children can generate new tests or take tests.
+                            </p>
                           </div>
                         )}
                         {isAdmin && (
@@ -412,7 +444,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                             }}>
                               <p style={{ color: 'var(--text-muted)', margin: 0 }}>
                                 <strong>Admin Note:</strong> Admins can view and delete tests, but cannot generate new tests. 
-                                Only parents and children can generate tests.
+                                Only children can generate and take tests.
                               </p>
                             </div>
                             <div style={{ marginBottom: '1rem' }}>
@@ -706,7 +738,8 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
     { id: 'overview', label: 'Overview' },
     { id: 'children', label: 'Children', badge: childList.length || null },
     { id: 'documents', label: 'Documents', badge: documentCount || null },
-    { id: 'tests', label: 'Tests' },
+    { id: 'tests', label: 'Tests', badge: testCount || null },
+    { id: 'reports', label: 'Reports' },
   ]
 
   if (loading) {
@@ -732,6 +765,34 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
         userProfile={user}
       />
       <div className="dashboard-content">
+
+        {/* Shared child selector for Documents, Tests, and Reports */}
+        {['documents', 'tests', 'reports'].includes(activeTab) && (isParent || isAdmin) && childList.length > 0 && (
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+            alignItems: 'center',
+            marginBottom: '1rem',
+            padding: '0.75rem',
+            background: 'var(--bg-secondary)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-color)'
+          }}>
+            <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginRight: '0.25rem' }}>Select child:</span>
+            {childList.map((child) => (
+              <button
+                key={child.id}
+                type="button"
+                onClick={() => setSelectedChild(child.id)}
+                className={selectedChild === child.id ? 'btn-primary' : 'btn-secondary'}
+                style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}
+              >
+                {child.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="tab-content">
           {activeTab === 'overview' && (
@@ -870,7 +931,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
               <h2>Documents</h2>
               {!selectedChild && childList.length > 0 && (
                 <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                  Please select a child to upload documents.
+                  Please select a child above to upload or view documents.
                 </p>
               )}
               {selectedChild ? (
@@ -900,11 +961,18 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
             <div className="dashboard-section" style={{ padding: 0, height: '100vh', overflow: 'hidden' }}>
               {!selectedChild && childList.length > 0 && (
                 <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                  Please select a child to view their evaluation report.
+                  Please select a child above to view their evaluation report and study guides.
                 </p>
               )}
               {selectedChild ? (
-                <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} />
+                <>
+                  {(isParent || isAdmin) && (
+                    <p style={{ marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                      Viewing: <strong style={{ color: 'var(--text-primary)' }}>{childList.find(c => c.id === selectedChild)?.name || 'Child'}</strong>
+                    </p>
+                  )}
+                  <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} />
+                </>
               ) : childList.length === 0 ? (
                 <div className="empty-state">
                   <p>Create a child profile first to view evaluation reports.</p>
@@ -924,6 +992,11 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                   >
                     ← Back to Tests
                   </button>
+                  {(isParent || isAdmin) && (
+                    <p style={{ marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                      Viewing test for: <strong style={{ color: 'var(--text-primary)' }}>{childList.find(c => c.id === selectedChild)?.name || 'Child'}</strong>
+                    </p>
+                  )}
                   <QuizPlayer
                     testId={selectedTest.id}
                     readOnly={true}
@@ -935,21 +1008,41 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                   <h2>Tests</h2>
                   {!selectedChild && childList.length > 0 && (
                     <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                      Please select a child to view or generate tests.
+                      Please select a child above to view their tests.
                     </p>
                   )}
                   {selectedChild ? (
                     <>
-                      <div style={{ marginBottom: '2rem' }}>
-                        <TestLauncher
-                          childId={selectedChild}
-                          userRole={user?.role}
-                          onTestGenerated={(test) => {
-                            setSelectedTest(test)
-                            showNotification('Test generated!', 'success')
-                          }}
-                        />
-                      </div>
+                      {(isParent || isAdmin) && (
+                        <p style={{ marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                          Viewing: <strong style={{ color: 'var(--text-primary)' }}>{childList.find(c => c.id === selectedChild)?.name || 'Child'}</strong>
+                        </p>
+                      )}
+                      {isParent && (
+                        <div style={{
+                          marginBottom: '1rem',
+                          padding: '1rem',
+                          background: 'var(--bg-tertiary)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-color)'
+                        }}>
+                          <p style={{ color: 'var(--text-muted)', margin: 0 }}>
+                            You can view all tests and evaluation reports (including cards). Only children can generate new tests or take tests.
+                          </p>
+                        </div>
+                      )}
+                      {!isParent && (
+                        <div style={{ marginBottom: '2rem' }}>
+                          <TestLauncher
+                            childId={selectedChild}
+                            userRole={user?.role}
+                            onTestGenerated={(test) => {
+                              setSelectedTest(test)
+                              showNotification('Test generated!', 'success')
+                            }}
+                          />
+                        </div>
+                      )}
                       <div style={{ marginTop: '2rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                           <h3>Test History</h3>

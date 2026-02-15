@@ -142,16 +142,24 @@ async def get_subjects_topics(
                     detail="Access denied"
                 )
         elif user_role in ("parent", "admin"):
-            # Verify parent owns this child
+            # Verify parent owns this child (compare as strings for UUID/str mismatch)
             child = await db.fetchrow(
                 "SELECT parent_id FROM children WHERE id = $1",
                 child_id
             )
-            if not child or (user_role == "parent" and child['parent_id'] != user_id):
+            if not child:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied"
                 )
+            if user_role == "parent":
+                child_parent_id = uuid_to_str(child['parent_id']) if child.get('parent_id') else None
+                user_id_str = str(user_id) if user_id else None
+                if child_parent_id != user_id_str:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Access denied"
+                    )
         
         # Get all document IDs for this child (check both direct child_id and junction table)
         # Use UNION to get documents from both sources
@@ -335,8 +343,8 @@ async def generate_test(
     
     POST /api/v1/tests/generate
     
-    - Child can generate tests for themselves
-    - Parent can generate tests for their children (must provide child_id in request)
+    - Only children can generate tests (for themselves).
+    - Parents and admins can view tests and reports but cannot generate or take tests.
     """
     try:
         user_role = current_user.get("role")
@@ -346,38 +354,23 @@ async def generate_test(
         if user_role == "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admins cannot generate tests. Only parents and children can generate tests."
+                detail="Admins cannot generate tests. Only children can generate tests."
             )
-        
-        # Determine child_id
-        if user_role == "child":
-            child_id = user_id
-            parent_id = None
-        elif user_role == "parent":
-            # Parent must provide child_id in request
-            if not request.child_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="child_id is required for parent test generation"
-                )
-            child_id = request.child_id
-            parent_id = user_id
-            
-            # Verify parent owns this child
-            child = await db.fetchrow(
-                "SELECT parent_id FROM children WHERE id = $1",
-                child_id
-            )
-            if not child or child['parent_id'] != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied: not authorized for this child"
-                )
-        else:
+        # Block parents from generating tests (they can view all tests and reports only)
+        if user_role == "parent":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid user role"
+                detail="Parents can view all tests and evaluation reports but cannot generate new tests. Only children can generate and take tests."
             )
+        
+        # Only children can generate tests (parent_id is None when child generates for themselves)
+        if user_role != "child":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only children can generate tests."
+            )
+        child_id = user_id
+        parent_id = None
         
         # Generate test - support both concept_id (legacy) and subject/topics (new).
         # For both paths we now create a draft test and enqueue background generation.
@@ -726,12 +719,14 @@ async def list_tests_for_child(
             # Admins can access all children's tests - no additional check needed
             pass
         elif user_role == "parent":
-            # Check if user is parent of the child
+            # Check if user is parent of the child (compare as strings for UUID/str mismatch)
             child = await db.fetchrow(
                 "SELECT parent_id FROM children WHERE id = $1",
                 child_id
             )
-            if not child or child['parent_id'] != user_id:
+            child_parent_id = uuid_to_str(child['parent_id']) if child and child.get('parent_id') else None
+            user_id_str = str(user_id) if user_id else None
+            if not child or child_parent_id != user_id_str:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied"
@@ -1179,18 +1174,38 @@ async def get_evaluation_report(
     """Get detailed evaluation report for a child.
     
     GET /api/v1/tests/child/{child_id}/evaluation-report?days_back=30&generate_guides=true
+    
+    - Child can view own report; parent can view their children's reports; admin can view any.
     """
     try:
         from services.evaluation_report_service import EvaluationReportService
         
         # Check access
         user_role = current_user.get("role")
-        user_child_id = current_user.get("child_id")
+        user_id = current_user.get("parent_id") or current_user.get("child_id")
         
-        if user_role == "child" and str(user_child_id) != child_id:
+        if user_role == "child":
+            if str(user_id) != str(child_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only view your own reports"
+                )
+        elif user_role == "parent":
+            child = await db.fetchrow(
+                "SELECT parent_id FROM children WHERE id = $1",
+                child_id
+            )
+            child_parent_id = uuid_to_str(child['parent_id']) if child and child.get('parent_id') else None
+            user_id_str = str(user_id) if user_id else None
+            if not child or child_parent_id != user_id_str:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only view reports for your children"
+                )
+        elif user_role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: You can only view your own reports"
+                detail="Access denied"
             )
         
         report_service = EvaluationReportService(db)
@@ -1234,14 +1249,33 @@ async def get_study_guide(
                 detail="Study guide not found"
             )
         
-        # Check access
+        # Check access: child (own), parent (their children's guides), admin (any)
         user_role = current_user.get("role")
-        user_child_id = current_user.get("child_id")
+        user_id = current_user.get("parent_id") or current_user.get("child_id")
+        guide_child_id = str(guide['child_id']) if guide.get('child_id') else None
         
-        if user_role == "child" and str(user_child_id) != str(guide['child_id']):
+        if user_role == "child":
+            if str(user_id) != guide_child_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only view your own study guides"
+                )
+        elif user_role == "parent":
+            child = await db.fetchrow(
+                "SELECT parent_id FROM children WHERE id = $1",
+                guide['child_id']
+            )
+            child_parent_id = uuid_to_str(child['parent_id']) if child and child.get('parent_id') else None
+            user_id_str = str(user_id) if user_id else None
+            if not child or child_parent_id != user_id_str:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only view study guides for your children"
+                )
+        elif user_role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: You can only view your own study guides"
+                detail="Access denied"
             )
         
         return guide
@@ -1282,14 +1316,32 @@ async def regenerate_study_guide(
                 detail="Study guide not found"
             )
         
-        # Check access
+        # Check access: child (own), parent (their children's guides), admin (any)
         user_role = current_user.get("role")
-        user_child_id = current_user.get("child_id")
+        user_id = current_user.get("parent_id") or current_user.get("child_id")
         
-        if user_role == "child" and str(user_child_id) != str(existing_guide['child_id']):
+        if user_role == "child":
+            if str(user_id) != str(existing_guide['child_id']):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only regenerate your own study guides"
+                )
+        elif user_role == "parent":
+            child = await db.fetchrow(
+                "SELECT parent_id FROM children WHERE id = $1",
+                existing_guide['child_id']
+            )
+            child_parent_id = uuid_to_str(child['parent_id']) if child and child.get('parent_id') else None
+            user_id_str = str(user_id) if user_id else None
+            if not child or child_parent_id != user_id_str:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: You can only regenerate study guides for your children"
+                )
+        elif user_role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: You can only regenerate your own study guides"
+                detail="Access denied"
             )
         
         # Get latest evaluation report data to regenerate with current errors/feedback

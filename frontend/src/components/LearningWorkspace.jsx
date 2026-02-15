@@ -15,9 +15,10 @@ export const useLearningContext = () => {
 }
 
 export default function LearningWorkspace({ childId, daysBack = 30, showAllGuides = false, user = null }) {
+  const isParent = user?.role === 'parent'
   const [activeGuideId, setActiveGuideId] = useState(null)
   const [activeContext, setActiveContext] = useState(null)
-  const [activeTab, setActiveTab] = useState('CHAT') // 'CHAT', 'GUIDE', or 'CARDS'
+  const [activeTab, setActiveTab] = useState(isParent ? 'GUIDE' : 'CHAT') // 'CHAT', 'GUIDE', or 'CARDS'
   const [coachOpen, setCoachOpen] = useState(true) // Always open by default
   const [progress, setProgress] = useState({}) // Track section progress
   const workspaceRef = useRef(null)
@@ -101,6 +102,7 @@ export default function LearningWorkspace({ childId, daysBack = 30, showAllGuide
             onNavigateTab={setActiveTab}
             userName={user?.name || user?.email || 'You'}
             isWorkspaceMode={true}
+            disableChat={isParent}
           />
         </div>
       </div>

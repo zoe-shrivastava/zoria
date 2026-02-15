@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { documents } from '../services/api'
 import { showNotification } from '../utils/notifications'
 
@@ -7,6 +7,15 @@ export default function DocumentUpload({ childId, childList = [], onUploadComple
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [selectedChildIds, setSelectedChildIds] = useState(childId ? [childId] : [])
+
+  // When childId is set (e.g. from shared "Select child" bar), attach only to that child
+  useEffect(() => {
+    if (childId) {
+      setSelectedChildIds([childId])
+    } else if (childList.length > 0) {
+      setSelectedChildIds([])
+    }
+  }, [childId, childList.length])
   
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
@@ -35,9 +44,8 @@ export default function DocumentUpload({ childId, childList = [], onUploadComple
       return
     }
     
-    // For parents with multiple children, require at least one selection
-    // For single child or child users, use childId
-    const childIdsToUse = childList.length > 0 ? selectedChildIds : (childId ? [childId] : [])
+    // When childId is provided (selected child from shared bar), use only that child
+    const childIdsToUse = childId ? [childId] : (childList.length > 0 ? selectedChildIds : [])
     
     if (childIdsToUse.length === 0) {
       const errorMsg = 'Please select at least one child profile'
@@ -82,7 +90,8 @@ export default function DocumentUpload({ childId, childList = [], onUploadComple
         </div>
       )}
       
-      {childList.length > 0 && (
+      {/* Only show multi-select when no child is pre-selected (e.g. shared "Select child" bar) */}
+      {childList.length > 0 && !childId && (
         <div className="form-group">
           <label>Attach to Child Profiles *</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
@@ -109,27 +118,45 @@ export default function DocumentUpload({ childId, childList = [], onUploadComple
           </p>
         </div>
       )}
-      
-      <div className="form-group">
-        <label htmlFor="file">Select PDF File *</label>
-        <input
-          type="file"
-          id="file"
-          accept=".pdf"
-          onChange={handleFileChange}
-          disabled={loading}
-          required
-        />
-        {file && <p className="file-info" style={{ marginTop: '0.5rem', color: 'var(--text-muted)' }}>Selected: {file.name}</p>}
+      <div
+        className="form-group"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: '0.75rem',
+          marginTop: childList.length > 0 && !childId ? '1rem' : 0,
+        }}
+      >
+        {childId && childList.length > 0 && (
+          <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+            Document will be attached to the child selected above.
+          </span>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+          <label htmlFor="file" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+            <span style={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>Select PDF File *</span>
+            <input
+              type="file"
+              id="file"
+              accept=".pdf"
+              onChange={handleFileChange}
+              disabled={loading}
+              required
+              style={{ fontSize: '0.875rem', maxWidth: '12rem' }}
+            />
+          </label>
+          <button type="submit" disabled={loading || !file} className="btn-primary">
+            {loading ? 'Uploading...' : 'Upload PDF'}
+          </button>
+        </div>
+        {file && (
+          <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>{file.name}</span>
+        )}
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          * Document will be processed automatically. Processing may take a minute.
+        </span>
       </div>
-      
-      <button type="submit" disabled={loading || !file} className="btn-primary">
-        {loading ? 'Uploading...' : 'Upload PDF'}
-      </button>
-      
-      <p className="form-hint" style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem', fontStyle: 'italic' }}>
-        * Document will be processed automatically. Processing may take a minute.
-      </p>
     </form>
   )
 }

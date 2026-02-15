@@ -14,7 +14,8 @@ export default function AICoach({
   activeTab,
   onNavigateTab,
   userName = 'You',
-  isWorkspaceMode = false
+  isWorkspaceMode = false,
+  disableChat = false
 }) {
   const [messages, setMessages] = useState([])
   const [inputMessage, setInputMessage] = useState('')
@@ -369,7 +370,7 @@ export default function AICoach({
   const isMobile = window.innerWidth < 768
 
   // Determine current tab (use prop if provided, otherwise default to CHAT)
-  const currentTab = activeTab || 'CHAT'
+  const currentTab = disableChat && (activeTab === 'CHAT' || !activeTab) ? 'GUIDE' : (activeTab || 'CHAT')
   
   // In workspace mode, always render with tabs
   if (isWorkspaceMode) {
@@ -409,22 +410,24 @@ export default function AICoach({
             borderTop: '1px solid var(--border-color)',
             background: 'var(--bg-primary)'
           }}>
-            <button
-              onClick={() => onNavigateTab?.('CHAT')}
-              style={{
-                flex: 1,
-                padding: '0.75rem 1rem',
-                border: 'none',
-                borderBottom: currentTab === 'CHAT' ? '3px solid var(--primary-color)' : '3px solid transparent',
-                background: currentTab === 'CHAT' ? 'var(--bg-secondary)' : 'transparent',
-                color: currentTab === 'CHAT' ? 'var(--primary-color)' : 'var(--text-muted)',
-                cursor: 'pointer',
-                fontWeight: currentTab === 'CHAT' ? '600' : '400',
-                transition: 'all 0.2s'
-              }}
-            >
-              Chat
-            </button>
+            {!disableChat && (
+              <button
+                onClick={() => onNavigateTab?.('CHAT')}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem 1rem',
+                  border: 'none',
+                  borderBottom: currentTab === 'CHAT' ? '3px solid var(--primary-color)' : '3px solid transparent',
+                  background: currentTab === 'CHAT' ? 'var(--bg-secondary)' : 'transparent',
+                  color: currentTab === 'CHAT' ? 'var(--primary-color)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  fontWeight: currentTab === 'CHAT' ? '600' : '400',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Chat
+              </button>
+            )}
             {guideId && (
               <>
                 <button
