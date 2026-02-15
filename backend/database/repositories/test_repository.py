@@ -123,7 +123,8 @@ class TestRepository:
                 tr.score,
                 tr.is_correct,
                 tr.time_spent_seconds,
-                tr.submitted_at
+                tr.submitted_at,
+                tr.metadata as response_metadata
             FROM test_questions tq
             LEFT JOIN questions q ON tq.question_id = q.id OR tq.original_question_id = q.id
             LEFT JOIN test_responses tr ON tr.test_id = tq.test_id 
@@ -146,6 +147,16 @@ class TestRepository:
             if q_dict.get('metadata'):
                 if isinstance(q_dict['metadata'], str):
                     q_dict['metadata'] = json.loads(q_dict['metadata'])
+            # Parse response_metadata if it exists and is a string
+            if q_dict.get('response_metadata'):
+                if isinstance(q_dict['response_metadata'], str):
+                    q_dict['response_metadata'] = json.loads(q_dict['response_metadata'])
+                # Merge response_metadata fields into question dict for easier access
+                if isinstance(q_dict['response_metadata'], dict):
+                    q_dict['detailed_feedback'] = q_dict['response_metadata'].get('detailed_feedback')
+                    q_dict['error_type'] = q_dict['response_metadata'].get('error_type')
+                    q_dict['misconception'] = q_dict['response_metadata'].get('misconception')
+                    q_dict['method_detected'] = q_dict['response_metadata'].get('method_detected')
             questions_list.append(q_dict)
         
         test_dict['questions'] = questions_list
@@ -511,7 +522,8 @@ class TestRepository:
         is_correct: bool,
         error_type: Optional[str] = None,
         misconception: Optional[str] = None,
-        method_detected: Optional[str] = None
+        method_detected: Optional[str] = None,
+        detailed_feedback: Optional[str] = None
     ) -> None:
         """Update the score for a response.
         
@@ -523,6 +535,7 @@ class TestRepository:
             error_type: Type of error if incorrect
             misconception: Description of misconception if applicable
             method_detected: Evaluation method used
+            detailed_feedback: Detailed feedback about what is wrong or correct
         """
         # Try to update with metadata, fallback if column doesn't exist
         try:
@@ -554,6 +567,8 @@ class TestRepository:
                 metadata['misconception'] = misconception
             if method_detected:
                 metadata['method_detected'] = method_detected
+            if detailed_feedback:
+                metadata['detailed_feedback'] = detailed_feedback
             
             metadata_json = json.dumps(metadata) if metadata else None
             

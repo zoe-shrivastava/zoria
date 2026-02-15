@@ -1281,7 +1281,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
           </div>
         )}
 
-        {/* Show expected answer for non-MCQ completed tests */}
+        {/* Show expected answer and detailed feedback for non-MCQ completed tests */}
         {isCompleted && !isMCQ && (() => {
           // Extract expected_answer from metadata or blueprint
           let expectedAnswer = null
@@ -1301,23 +1301,131 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
             }
           }
           
-          if (expectedAnswer) {
+          // Extract detailed_feedback from response metadata
+          const detailedFeedback = currentQuestion.detailed_feedback
+          const isIncorrect = currentQuestion.is_correct === false
+          
+          if (expectedAnswer || (isIncorrect && detailedFeedback)) {
+            // Handle array format (convert to string) and normalize backslashes
+            let normalizedExpectedAnswer = expectedAnswer
+            
+            // Debug: log the raw value
+            console.log('Expected answer raw:', expectedAnswer, 'Type:', typeof expectedAnswer, 'IsArray:', Array.isArray(expectedAnswer))
+            
+            // If it's a string that looks like a Python list (e.g., "['value']" or '["value"]'), extract the content
+            if (typeof normalizedExpectedAnswer === 'string') {
+              // Try to parse as JSON array first
+              if (normalizedExpectedAnswer.trim().startsWith('[')) {
+                try {
+                  const parsed = JSON.parse(normalizedExpectedAnswer)
+                  if (Array.isArray(parsed)) {
+                    normalizedExpectedAnswer = parsed
+                    console.log('Parsed as JSON array:', parsed)
+                  }
+                } catch (e) {
+                  // If JSON parsing fails, try to extract from Python-style string representation
+                  // Match patterns like: ['value'] or ["value"] or ['value1', 'value2']
+                  const pythonListMatch = normalizedExpectedAnswer.match(/^\[(['"])(.*?)\1\]$/)
+                  if (pythonListMatch) {
+                    // Single item in quotes - extract the content
+                    normalizedExpectedAnswer = pythonListMatch[2]
+                    console.log('Extracted from Python-style list:', normalizedExpectedAnswer)
+                  } else {
+                    // Try to extract content between brackets more flexibly
+                    // Handle cases like: ['value'] or ["value"] with escaped quotes
+                    const bracketMatch = normalizedExpectedAnswer.match(/^\[(.*)\]$/)
+                    if (bracketMatch) {
+                      let content = bracketMatch[1].trim()
+                      // Remove surrounding quotes if present (handle both ' and ")
+                      if ((content.startsWith("'") && content.endsWith("'")) || 
+                          (content.startsWith('"') && content.endsWith('"'))) {
+                        content = content.slice(1, -1)
+                      }
+                      // Unescape any escaped quotes
+                      content = content.replace(/\\'/g, "'").replace(/\\"/g, '"')
+                      normalizedExpectedAnswer = content
+                      console.log('Extracted from brackets:', normalizedExpectedAnswer)
+                    }
+                  }
+                }
+              }
+            }
+            
+            if (Array.isArray(normalizedExpectedAnswer)) {
+              // If it's an array, join elements with space, or take first element if single item
+              normalizedExpectedAnswer = normalizedExpectedAnswer.length === 1 
+                ? normalizedExpectedAnswer[0] 
+                : normalizedExpectedAnswer.join(' ')
+              console.log('Extracted from array:', normalizedExpectedAnswer)
+            }
+            
+            // Convert to string if not already
+            if (typeof normalizedExpectedAnswer !== 'string') {
+              normalizedExpectedAnswer = String(normalizedExpectedAnswer)
+            }
+            
+            // Normalize double backslashes to single backslashes for LaTeX rendering
+            // This handles JSON-escaped backslashes
+            // Replace \\ (two backslashes) with \ (one backslash) for LaTeX
+            // Do this multiple times to handle cases like \\\\ (four backslashes) -> \\ (two) -> \ (one)
+            let beforeNormalize = normalizedExpectedAnswer
+            while (normalizedExpectedAnswer.includes('\\\\')) {
+              normalizedExpectedAnswer = normalizedExpectedAnswer.replace(/\\\\/g, '\\')
+            }
+            console.log('Expected answer - Before normalize:', beforeNormalize, 'After normalize:', normalizedExpectedAnswer)
+            
+            // Extract detailed_feedback from response metadata
+            const detailedFeedback = currentQuestion.detailed_feedback
+            const isIncorrect = currentQuestion.is_correct === false
+            
             return (
-              <div
-                style={{
-                  marginTop: '0.75rem',
-                  padding: '0.75rem',
-                  background: 'var(--bg-secondary)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px dashed var(--border-color)',
-                  fontSize: '0.95rem',
-                  lineHeight: 1.5,
-                }}
-              >
-                <div>
-                  <strong>Expected answer:</strong>{' '}
-                  <MathText text={expectedAnswer} inline />
-                </div>
+              <div>
+                {expectedAnswer && (
+                  <div
+                    style={{
+                      marginTop: '0.75rem',
+                      padding: '0.75rem',
+                      background: 'var(--bg-secondary)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px dashed var(--border-color)',
+                      fontSize: '0.95rem',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div>
+                      <strong>Expected answer:</strong>{' '}
+                      <MathText text={normalizedExpectedAnswer} inline />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Show detailed feedback for incorrect answers */}
+                {isIncorrect && detailedFeedback && (
+                  <div
+                    style={{
+                      marginTop: '0.75rem',
+                      padding: '1rem',
+                      background: 'var(--error-color-light)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--error-color)',
+                      borderLeft: '4px solid var(--error-color)',
+                      fontSize: '0.95rem',
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    <div style={{
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: 'var(--error-color)',
+                      marginBottom: '0.75rem'
+                    }}>
+                      📝 Detailed Explanation
+                    </div>
+                    <div style={{ color: 'var(--text-color)' }}>
+                      <MathText text={detailedFeedback} />
+                    </div>
+                  </div>
+                )}
               </div>
             )
           }
@@ -1373,15 +1481,24 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false }) {
                   paddingLeft: '1.5rem',
                   listStyleType: 'decimal',
                 }}>
-                  {solutionSteps.map((step, idx) => (
-                    <li key={idx} style={{
-                      marginBottom: '0.75rem',
-                      fontSize: '0.95rem',
-                      lineHeight: 1.6,
-                    }}>
-                      <MathText text={step} />
-                    </li>
-                  ))}
+                  {solutionSteps.map((step, idx) => {
+                    // Normalize double backslashes to single backslashes for LaTeX rendering
+                    // JSON stores \\ (2 backslashes) which represents \ (1 backslash) in the parsed string
+                    // But LaTeX needs single backslashes, so we convert \\ to \
+                    const normalizedStep = typeof step === 'string' 
+                      ? step.replace(/\\\\/g, '\\') 
+                      : step
+                    
+                    return (
+                      <li key={idx} style={{
+                        marginBottom: '0.75rem',
+                        fontSize: '0.95rem',
+                        lineHeight: 1.6,
+                      }}>
+                        <MathText text={normalizedStep} />
+                      </li>
+                    )
+                  })}
                 </ol>
               </div>
             )

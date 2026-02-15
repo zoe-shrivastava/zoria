@@ -40,7 +40,7 @@ class ScoringService:
         question_id: str,
         answer: str,
         behavioral_data: Optional[BehavioralPayload] = None
-    ) -> Tuple[bool, float, Optional[str], Optional[str], Optional[str]]:
+    ) -> Tuple[bool, float, Optional[str], Optional[str], Optional[str], Optional[str]]:
         """Grade a single response using hybrid evaluation routing.
         
         Args:
@@ -97,8 +97,15 @@ class ScoringService:
             elif 'concept_name' in metadata:
                 concept_tags = [metadata.get('concept_name')]
             
+            # Extract solution steps from metadata if available (for process evaluation)
+            solution_steps = None
+            if isinstance(metadata.get('blueprint'), dict):
+                solution_steps = metadata['blueprint'].get('solution_steps')
+            if not solution_steps and 'solution_steps' in metadata:
+                solution_steps = metadata.get('solution_steps')
+            
             # Route to appropriate evaluator
-            is_correct, score, method_detected, error_type, misconception = await self.question_router.evaluate(
+            is_correct, score, method_detected, error_type, misconception, detailed_feedback = await self.question_router.evaluate(
                 student_answer=answer_to_grade,
                 question_type=question_type,
                 correct_answer=correct_answer,
@@ -106,7 +113,8 @@ class ScoringService:
                 metadata=metadata,
                 max_score=max_score,
                 question_text=question.get('text', ''),
-                concept_tags=concept_tags
+                concept_tags=concept_tags,
+                solution_steps=solution_steps
             )
         
         # Apply behavioral penalties
@@ -118,13 +126,14 @@ class ScoringService:
             test_id, question_id, score, is_correct,
             error_type=error_type.value if error_type else None,
             misconception=misconception,
-            method_detected=method_detected
+            method_detected=method_detected,
+            detailed_feedback=detailed_feedback
         )
         
         # Store error type and misconception in response metadata if available
         # (This would require extending the test_responses table or using metadata field)
         
-        return is_correct, score, error_type.value if error_type else None, misconception, method_detected
+        return is_correct, score, error_type.value if error_type else None, misconception, method_detected, detailed_feedback
     
     def _extract_answer_component(
         self,
@@ -552,7 +561,7 @@ class ScoringService:
                 else:
                     answer = response
                 
-                is_correct, score, error_type, misconception, method = await self.grade_response(
+                is_correct, score, error_type, misconception, method, detailed_feedback = await self.grade_response(
                     test_id, question_id, answer, behavioral_data
                 )
                 graded_count += 1

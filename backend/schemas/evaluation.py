@@ -39,4 +39,5 @@ class EvaluationResult(BaseModel):
     method_detected: Optional[str] = Field(None, description="Method used for evaluation")
     error_type: Optional[str] = Field(None, description="Type of error if incorrect")
     misconception: Optional[str] = Field(None, description="Description of misconception if applicable")
+    detailed_feedback: Optional[str] = Field(None, description="Detailed feedback about what is wrong, what is missing, or what is correct")
     behavioral_data: Optional[BehavioralPayload] = Field(None, description="Behavioral metrics")

@@ -47,21 +47,40 @@ def get_embedding_service() -> EmbeddingService:
 
 
 def get_llm_service() -> LLMService:
-    """Dependency to get LLM service."""
-    # Use local Ollama for question generation and evaluation
+    """Dependency to get LLM service for question generation."""
+    # Use OpenAI GPT-5-nano for question generation
     try:
         from core.database import get_db
         return LLMService(
-            model_name="llama3.2:3b-instruct-fp16",
+            model_name="gpt-5-nano",
             enable_logging=True,
             context_source="question_generation"
         )
     except Exception:
         # Fallback if database not available
         return LLMService(
-            model_name="llama3.2:3b-instruct-fp16",
+            model_name="gpt-5-nano",
             enable_logging=False,
             context_source="question_generation"
+        )
+
+
+def get_evaluation_llm_service() -> LLMService:
+    """Dependency to get LLM service for evaluation (uses local Ollama)."""
+    # Use local Ollama for evaluation
+    try:
+        from core.database import get_db
+        return LLMService(
+            model_name="llama3.2:3b-instruct-fp16",
+            enable_logging=True,
+            context_source="evaluation"
+        )
+    except Exception:
+        # Fallback if database not available
+        return LLMService(
+            model_name="llama3.2:3b-instruct-fp16",
+            enable_logging=False,
+            context_source="evaluation"
         )
 
 
@@ -84,11 +103,11 @@ def get_test_generation_service(
 
 def get_scoring_service(
     db: Database = Depends(get_database),
-    llm_service: LLMService = Depends(get_llm_service)
+    llm_service: LLMService = Depends(get_evaluation_llm_service)
 ) -> ScoringService:
     """Dependency to get scoring service."""
     # Note: embedding_service is optional for scoring
-    # LLM service is used for graph evaluation
+    # LLM service is used for evaluation (uses Ollama)
     return ScoringService(db, embedding_service=None, llm_service=llm_service)
 
 

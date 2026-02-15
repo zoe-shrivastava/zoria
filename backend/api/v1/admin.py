@@ -504,8 +504,12 @@ async def reevaluate_test(
         
         test_repo = TestRepository(db)
         
-        # Get LLM service for scoring service
-        llm_service = LLMService()
+        # Get LLM service for evaluation (uses Ollama)
+        llm_service = LLMService(
+            model_name="llama3.2:3b-instruct-fp16",
+            enable_logging=True,
+            context_source="evaluation"
+        )
         scoring_service = ScoringService(db, embedding_service=None, llm_service=llm_service)
         mastery_service = MasteryService(db)
         

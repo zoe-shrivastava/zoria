@@ -44,8 +44,9 @@ class QuestionRouter:
         metadata: Dict[str, Any],
         max_score: float,
         question_text: Optional[str] = None,
-        concept_tags: Optional[list] = None
-    ) -> Tuple[bool, float, Optional[str], ErrorType, Optional[str]]:
+        concept_tags: Optional[list] = None,
+        solution_steps: Optional[list] = None
+    ) -> Tuple[bool, float, Optional[str], ErrorType, Optional[str], Optional[str]]:
         """Route question to appropriate evaluator and return result.
         
         Args:
@@ -57,9 +58,10 @@ class QuestionRouter:
             max_score: Maximum score
             question_text: Question text (for LLM evaluator)
             concept_tags: Concept tags (for LLM evaluator)
+            solution_steps: Optional list of expected solution steps (for LLM evaluator)
             
         Returns:
-            Tuple of (is_correct, score, method_detected, error_type, misconception)
+            Tuple of (is_correct, score, method_detected, error_type, misconception, detailed_feedback)
         """
         # Determine evaluator type
         evaluator_type = self.routing_map.get(question_type, 'deterministic')
@@ -70,13 +72,15 @@ class QuestionRouter:
         
         try:
             if evaluator_type == 'deterministic':
-                return self.deterministic_evaluator.evaluate(
+                result = self.deterministic_evaluator.evaluate(
                     student_answer=student_answer,
                     correct_answer=correct_answer,
                     question_type=question_type,
                     metadata=metadata,
                     max_score=max_score
                 )
+                # Add None for detailed_feedback (deterministic evaluators don't provide it)
+                return (*result, None)
             
             elif evaluator_type == 'heuristic':
                 # For short_answer, check if it's numerical
@@ -84,19 +88,22 @@ class QuestionRouter:
                 if self._is_numerical_answer(student_answer):
                     # Use expected_answer if available, otherwise correct_answer
                     answer_to_check = expected_answer or str(correct_answer) or ""
-                    return self.heuristic_evaluator.evaluate(
+                    result = self.heuristic_evaluator.evaluate(
                         student_answer=student_answer,
                         correct_answer=answer_to_check,
                         metadata=metadata,
                         max_score=max_score
                     )
+                    # Add None for detailed_feedback (heuristic evaluators don't provide it)
+                    return (*result, None)
                 else:
                     # Text-based short answer, use deterministic
-                    return self.deterministic_evaluator._evaluate_exact_match(
+                    result = self.deterministic_evaluator._evaluate_exact_match(
                         student_answer=student_answer,
                         correct_answer=expected_answer or str(correct_answer) or "",
                         max_score=max_score
                     )
+                    return (*result, None)
             
             elif evaluator_type == 'llm':
                 if not self.llm_evaluator:
@@ -104,11 +111,12 @@ class QuestionRouter:
                         f"LLM evaluator not available for {question_type}, "
                         "falling back to deterministic"
                     )
-                    return self.deterministic_evaluator._evaluate_exact_match(
+                    result = self.deterministic_evaluator._evaluate_exact_match(
                         student_answer=student_answer,
                         correct_answer=expected_answer or str(correct_answer) or "",
                         max_score=max_score
                     )
+                    return (*result, None)
                 
                 # Use expected_answer for LLM evaluation
                 if not expected_answer:
@@ -124,22 +132,24 @@ class QuestionRouter:
                     question_text=question_text or "",
                     metadata=metadata,
                     max_score=max_score,
-                    concept_tags=concept_tags
+                    concept_tags=concept_tags,
+                    solution_steps=solution_steps
                 )
             
             else:
                 # Unknown evaluator type, fallback to deterministic
                 logger.warning(f"Unknown evaluator type '{evaluator_type}', using deterministic")
-                return self.deterministic_evaluator._evaluate_exact_match(
+                result = self.deterministic_evaluator._evaluate_exact_match(
                     student_answer=student_answer,
                     correct_answer=expected_answer or str(correct_answer) or "",
                     max_score=max_score
                 )
+                return (*result, None)
                 
         except Exception as e:
             logger.error(f"Error in question routing: {e}", exc_info=True)
             # Fallback to basic evaluation
-            return False, 0.0, "routing_error", ErrorType.NONE, None
+            return False, 0.0, "routing_error", ErrorType.NONE, None, None
     
     def _is_numerical_answer(self, answer: str) -> bool:
         """Check if answer appears to be numerical.
