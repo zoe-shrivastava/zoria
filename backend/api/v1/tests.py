@@ -1504,11 +1504,8 @@ async def chat_with_coach(
         "guide_id": "uuid",
         "message": "user message",
         "conversation_history": [...],
-        "context": {
-            "activeTopic": "...",
-            "relatedError": {...},
-            "navigationState": "GUIDE"
-        }
+        "context": {...},
+        "language": "English"  // optional: e.g. English, Hindi, Spanish
     }
     """
     try:
@@ -1518,6 +1515,7 @@ async def chat_with_coach(
         message = request.get("message")
         conversation_history = request.get("conversation_history", [])
         context = request.get("context", {})
+        language = request.get("language")
         
         if not guide_id or not message:
             raise HTTPException(
@@ -1546,7 +1544,7 @@ async def chat_with_coach(
             )
         
         # Build system prompt for Socratic AI Coach
-        system_prompt = _build_coach_system_prompt(guide, context)
+        system_prompt = _build_coach_system_prompt(guide, context, language=language)
         
         # Prepare messages
         messages = []
@@ -1601,10 +1599,15 @@ async def chat_with_coach(
         )
 
 
-def _build_coach_system_prompt(guide: dict, context: dict) -> str:
+def _build_coach_system_prompt(guide: dict, context: dict, language: Optional[str] = None) -> str:
     """Build system prompt for Socratic AI Coach."""
-    prompt = """# Role: Socratic AI Coach (Llama 3.1)
+    output_lang = (language or "English").strip() or "English"
+    prompt = f"""# Role: Socratic AI Coach (Llama 3.1)
 You are a brilliant, supportive tutor. Your goal is to guide students to mastery by using the provided **Study Guide** as a topical anchor while utilizing your own vast knowledge to provide analogies, explanations, and practice.
+
+## 0. OUTPUT LANGUAGE AND SCRIPT
+Respond in **{output_lang}** only. All your messages (explanations, questions, hints, navigation suggestions) must be in {output_lang}. Keep LaTeX and math notation unchanged. If the user writes in another language, you may acknowledge briefly but continue in {output_lang}.
+**CRITICAL - Use the native script, not Roman/Latin transliteration:** For Hindi, write in **Devanagari script** (e.g. आपको, समस्या, मदद), NOT in Roman script (e.g. "Aapko", "samasya", "madad"). For Spanish or English, use standard Latin script. Never respond in Hindi using Romanized/English letters—always use Devanagari (हिंदी) when the language is Hindi.
 
 ## 1. THE KNOWLEDGE HIERARCHY
 - **Scope Anchor**: Use the provided `[STUDY_GUIDE]` to identify which topics are "in-bounds." Do not teach advanced concepts (e.g., Relativity) if the guide only covers Classical Mechanics.
@@ -1623,7 +1626,7 @@ You act as the navigator for the Learning Drawer. Use these tags to trigger UI c
 - **Markdown Links**: Use [View Guide](guide) or [Try Cards](cards) for manual navigation.
 
 ## 4. TECHNICAL & FORMATTING
-- **LaTeX**: Always use double-backslashes for math: `\\vec{F} = ma`.
+- **LaTeX**: Always use double-backslashes for math: `\\vec{{F}} = ma`.
 - **Brevity**: Keep responses under 3-4 sentences. The conversation should be a back-and-forth, not a lecture.
 
 ## 5. STUDY GUIDE CONTEXT

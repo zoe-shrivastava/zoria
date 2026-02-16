@@ -105,7 +105,8 @@ export default function AICoach({
           role: m.role,
           content: m.content
         })),
-        context: contextPayload
+        context: contextPayload,
+        ...(preferredLanguage && { language: preferredLanguage })
       })
 
       if (response.success) {
@@ -397,10 +398,21 @@ export default function AICoach({
             justifyContent: 'space-between',
             alignItems: 'center'
           }}>
-            <div>
-              <div style={{ fontWeight: '600' }}>Zoria</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Your AI learning assistant
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <img
+                src="/zoria-coach-icon.png?v=4"
+                alt="Zoria"
+                style={{
+                  height: 48,
+                  width: 'auto',
+                  flexShrink: 0
+                }}
+              />
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '1.125rem' }}>Zoria</div>
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                  Your AI learning assistant
+                </div>
               </div>
             </div>
           </div>
@@ -504,28 +516,56 @@ export default function AICoach({
                         gap: '0.25rem'
                       }}
                     >
-                      {/* User name label */}
+                      {/* User name label + student icon */}
                       {isUser && (
                         <div style={{
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: 'var(--primary-color)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
                           alignSelf: 'flex-end',
                           paddingRight: '0.5rem'
                         }}>
-                          {userName}
+                          <img
+                            src="/student-icon.png"
+                            alt="Student"
+                            style={{
+                              height: 36,
+                              width: 'auto'
+                            }}
+                          />
+                          <span style={{
+                            fontSize: '1rem',
+                            fontWeight: '600',
+                            color: 'var(--primary-color)'
+                          }}>
+                            {userName}
+                          </span>
                         </div>
                       )}
-                      {/* Zoria label */}
+                      {/* Zoria label + avatar */}
                       {!isUser && (
                         <div style={{
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: 'var(--text-muted)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
                           alignSelf: 'flex-start',
                           paddingLeft: '0.5rem'
                         }}>
-                          Zoria
+                          <img
+                            src="/zoria-coach-icon.png?v=4"
+                            alt="Zoria"
+                            style={{
+                              height: 36,
+                              width: 'auto'
+                            }}
+                          />
+                          <span style={{
+                            fontSize: '1rem',
+                            fontWeight: '600',
+                            color: 'var(--text-muted)'
+                          }}>
+                            Zoria
+                          </span>
                         </div>
                       )}
                       <div
@@ -716,10 +756,21 @@ export default function AICoach({
         alignItems: 'center',
         background: 'var(--bg-secondary)'
       }}>
-        <div>
-          <div style={{ fontWeight: '600' }}>Zoria</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Your AI learning assistant
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <img
+            src="/zoria-coach-icon.png?v=4"
+            alt="Zoria"
+            style={{
+              height: 48,
+              width: 'auto',
+              flexShrink: 0
+            }}
+          />
+          <div>
+            <div style={{ fontWeight: '600', fontSize: '1.125rem' }}>Zoria</div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+              Your AI learning assistant
+            </div>
           </div>
         </div>
         <button
@@ -754,28 +805,56 @@ export default function AICoach({
                 gap: '0.25rem'
               }}
             >
-              {/* User name label */}
+              {/* User name label + student icon */}
               {isUser && (
                 <div style={{
-                  fontSize: '0.75rem',
-                  fontWeight: '600',
-                  color: 'var(--primary-color)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
                   alignSelf: 'flex-end',
                   paddingRight: '0.5rem'
                 }}>
-                  {userName}
+                  <img
+                    src="/student-icon.png"
+                    alt="Student"
+                    style={{
+                      height: 36,
+                      width: 'auto'
+                    }}
+                  />
+                  <span style={{
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'var(--primary-color)'
+                  }}>
+                    {userName}
+                  </span>
                 </div>
               )}
-              {/* Zoria label */}
+              {/* Zoria label + avatar */}
               {!isUser && (
                 <div style={{
-                  fontSize: '0.75rem',
-                  fontWeight: '600',
-                  color: 'var(--text-muted)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
                   alignSelf: 'flex-start',
                   paddingLeft: '0.5rem'
                 }}>
-                  Zoria
+                  <img
+                    src="/zoria-coach-icon.png?v=4"
+                    alt="Zoria"
+                    style={{
+                      height: 36,
+                      width: 'auto'
+                    }}
+                  />
+                  <span style={{
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'var(--text-muted)'
+                  }}>
+                    Zoria
+                  </span>
                 </div>
               )}
               <div

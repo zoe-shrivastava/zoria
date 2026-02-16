@@ -65,8 +65,15 @@ export default function Header({ user, onLogout, tabs = null, activeTab = null, 
         width: '100%',
         gap: '1rem'
       }}>
-        {/* Left: Zoria Logo */}
-        <h1 style={{ margin: 0, flexShrink: 0 }}>Zoria</h1>
+        {/* Left: Zoria Logo + name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+          <img
+            src="/zoria-header-logo.png"
+            alt="Zoria"
+            style={{ height: 56, width: 'auto', display: 'block' }}
+          />
+          <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Zoria</h1>
+        </div>
 
         {/* Middle: Tabs */}
         {tabs && tabs.length > 0 && (

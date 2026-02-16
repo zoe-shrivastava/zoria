@@ -921,8 +921,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
         ) : study_guide_links && study_guide_links.length > 0 ? (
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-            gap: '1rem',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+            gap: '0.5rem',
             maxWidth: '100%'
           }}>
             {study_guide_links.map((link) => {
@@ -952,16 +952,18 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                   }}
                   style={{
                     background: 'var(--bg-secondary)',
-                    padding: '1rem',
+                    padding: '0.5rem 0.6rem',
                     borderRadius: 'var(--radius-md)',
-                    border: '2px solid var(--border-color)',
+                    border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s',
                     display: 'flex',
                     flexDirection: 'column',
-                    aspectRatio: '1',
                     minHeight: 0,
+                    minWidth: 0,
+                    overflow: 'hidden',
                     justifyContent: 'space-between',
+                    gap: '0.15rem',
                     position: 'relative'
                   }}
                   onMouseEnter={(e) => {
@@ -984,18 +986,18 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     }}
                     style={{
                       position: 'absolute',
-                      top: '0.5rem',
-                      right: '0.5rem',
+                      top: '0.25rem',
+                      right: '0.25rem',
                       background: 'var(--bg-primary)',
                       border: '1px solid var(--border-color)',
                       borderRadius: '50%',
-                      width: '28px',
-                      height: '28px',
+                      width: '22px',
+                      height: '22px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       cursor: 'pointer',
-                      fontSize: '1rem',
+                      fontSize: '0.75rem',
                       padding: 0,
                       zIndex: 10,
                       transition: 'all 0.2s'
@@ -1013,21 +1015,28 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     🔄
                   </button>
 
-                  <div>
+                  <div style={{ minWidth: 0, minHeight: 0, flex: '1 1 auto', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                     <div style={{ 
                       fontWeight: '600', 
-                      fontSize: '1rem',
-                      marginBottom: '0.5rem',
+                      fontSize: '0.8rem',
+                      marginBottom: 0,
                       color: 'var(--primary-color)',
-                      paddingRight: '2rem'
+                      paddingRight: '1.5rem',
+                      lineHeight: 1.25,
+                      overflow: 'hidden',
+                      wordBreak: 'break-word',
+                      minWidth: 0
                     }}>
                       {subjectName}
                     </div>
                     {guide.focus_area && guide.focus_area !== link.concept && (
                       <div style={{ 
-                        fontSize: '0.75rem', 
+                        fontSize: '0.65rem', 
                         color: 'var(--text-color)', 
-                        marginBottom: '0.5rem' 
+                        marginBottom: 0,
+                        overflow: 'hidden',
+                        wordBreak: 'break-word',
+                        minWidth: 0
                       }}>
                         {guide.focus_area}
                       </div>
@@ -1040,14 +1049,16 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                       const date = new Date(dateStr)
                       return (
                         <div style={{ 
-                          fontSize: '0.7rem', 
+                          fontSize: '0.6rem', 
                           color: 'var(--text-muted)',
-                          marginTop: '0.5rem'
+                          marginTop: 0,
+                          overflow: 'hidden',
+                          wordBreak: 'break-word',
+                          minWidth: 0
                         }}>
                           {date.toLocaleString(undefined, {
                             month: 'short',
                             day: 'numeric',
-                            year: 'numeric',
                             hour: '2-digit',
                             minute: '2-digit'
                           })}
@@ -1056,14 +1067,16 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     })()}
                   </div>
                   <div style={{
-                    marginTop: '0.75rem',
-                    padding: '0.5rem',
+                    marginTop: 'auto',
+                    padding: '0.25rem 0.35rem',
                     background: 'var(--primary-color-light)',
                     borderRadius: 'var(--radius-sm)',
                     textAlign: 'center',
-                    fontSize: '0.875rem',
+                    fontSize: '0.65rem',
                     fontWeight: '600',
-                    color: 'var(--primary-color)'
+                    color: 'var(--primary-color)',
+                    flexShrink: 0,
+                    minWidth: 0
                   }}>
                     View Guide
                   </div>
@@ -1120,6 +1133,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
           activeTab="GUIDE"
           onNavigateTab={() => {}}
           userName={user?.name || user?.email || 'You'}
+          preferredLanguage={preferredLanguage}
         />
       )}
 
