@@ -15,7 +15,8 @@ export default function StudyGuide({
   guideId, 
   onClose,
   contextPayload = null,
-  onNavigateToCards = null
+  onNavigateToCards = null,
+  preferredLanguage = null,
 }) {
   const [guide, setGuide] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -46,7 +47,7 @@ export default function StudyGuide({
     
     try {
       setRegenerating(true)
-      const result = await tests.regenerateStudyGuide(guideId)
+      const result = await tests.regenerateStudyGuide(guideId, preferredLanguage)
       showNotification('Study guide regenerated successfully', 'success')
       // Reload the guide to show the new content
       // If a new guide_id was returned, use it; otherwise use the existing one
@@ -700,7 +701,16 @@ export default function StudyGuide({
             // Code blocks
             // eslint-disable-next-line react/prop-types
             code: ({ children, className }) => {
-              const code = String(children || '')
+              const code = String(children || '').trim()
+              const isLatexBlock = className && (className.includes('latex') || className === 'language-math')
+              if (isLatexBlock && (code.includes('$$') || code.includes('$'))) {
+                // Render ```latex ... $$...$$ ... ``` as math instead of raw code
+                return (
+                  <div style={{ marginBottom: '1rem', marginTop: '0.5rem' }}>
+                    <MathText text={code} inline={false} />
+                  </div>
+                )
+              }
               if (className?.startsWith('language-')) {
                 return (
                   <pre style={{ 

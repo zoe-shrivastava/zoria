@@ -10,7 +10,8 @@ export default function LearningDrawer({
   contextPayload = null,
   containerHeight = null,
   onOpenCoach = null,
-  isWorkspaceMode = false
+  isWorkspaceMode = false,
+  preferredLanguage = null,
 }) {
   // Use workspace context if available
   let workspaceContext = null
@@ -141,6 +142,7 @@ export default function LearningDrawer({
                 guideId={guideId}
                 contextPayload={contextPayload}
                 onNavigateToCards={() => handleTabChange('CARDS')}
+                preferredLanguage={preferredLanguage}
               />
             </div>
             <div style={{ width: '50%', flexShrink: 0, overflowY: 'auto' }}>
@@ -272,6 +274,7 @@ export default function LearningDrawer({
                 guideId={guideId}
                 contextPayload={contextPayload}
                 onNavigateToCards={() => handleTabChange('CARDS')}
+                preferredLanguage={preferredLanguage}
               />
             </div>
             <div style={{ width: '50%', flexShrink: 0, overflowY: 'auto' }}>

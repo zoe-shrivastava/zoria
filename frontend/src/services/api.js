@@ -423,10 +423,11 @@ export const tests = {
     }),
 
   // Evaluation reports and study guides
-  getEvaluationReport: (childId, daysBack = 30, generateGuides = true) => {
+  getEvaluationReport: (childId, daysBack = 30, generateGuides = true, language = null) => {
     const params = new URLSearchParams()
     params.append('days_back', daysBack)
     params.append('generate_guides', generateGuides)
+    if (language) params.append('language', language)
     return apiRequest(`/api/v1/tests/child/${childId}/evaluation-report?${params.toString()}`, {
       method: 'GET',
     })
@@ -437,10 +438,14 @@ export const tests = {
       method: 'GET',
     }),
 
-  regenerateStudyGuide: (guideId) =>
-    apiRequest(`/api/v1/tests/study-guides/${guideId}/regenerate`, {
+  regenerateStudyGuide: (guideId, language = null) => {
+    const url = language
+      ? `/api/v1/tests/study-guides/${guideId}/regenerate?language=${encodeURIComponent(language)}`
+      : `/api/v1/tests/study-guides/${guideId}/regenerate`
+    return apiRequest(url, {
       method: 'POST',
-    }),
+    })
+  },
 
   listStudyGuides: (childId, conceptName = null) => {
     const params = conceptName ? `?concept_name=${encodeURIComponent(conceptName)}` : ''

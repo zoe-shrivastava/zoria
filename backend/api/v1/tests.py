@@ -1173,12 +1173,13 @@ async def get_evaluation_report(
     child_id: str,
     days_back: int = Query(30, ge=7, le=365),
     generate_guides: bool = Query(True),
+    language: Optional[str] = Query(None, description="Language for study guides and cards (e.g. English, Hindi, Spanish)"),
     current_user: dict = Depends(get_current_user),
     db: Database = Depends(get_database)
 ):
     """Get detailed evaluation report for a child.
     
-    GET /api/v1/tests/child/{child_id}/evaluation-report?days_back=30&generate_guides=true
+    GET /api/v1/tests/child/{child_id}/evaluation-report?days_back=30&generate_guides=true&language=Hindi
     
     - Child can view own report; parent can view their children's reports; admin can view any.
     """
@@ -1217,7 +1218,8 @@ async def get_evaluation_report(
         report = await report_service.generate_report(
             child_id=child_id,
             days_back=days_back,
-            generate_study_guides=generate_guides
+            generate_study_guides=generate_guides,
+            language=language,
         )
         
         return report
@@ -1299,12 +1301,13 @@ async def get_study_guide(
 async def regenerate_study_guide(
     guide_id: str,
     days_back: int = Query(30, ge=7, le=365),
+    language: Optional[str] = Query(None, description="Language for study guide and cards (e.g. English, Hindi, Spanish)"),
     current_user: dict = Depends(get_current_user),
     db: Database = Depends(get_database)
 ):
     """Regenerate a study guide with latest evaluation data.
     
-    POST /api/v1/tests/study-guides/{guide_id}/regenerate?days_back=30
+    POST /api/v1/tests/study-guides/{guide_id}/regenerate?days_back=30&language=Hindi
     """
     try:
         from services.study_guide_service import StudyGuideService
@@ -1374,14 +1377,15 @@ async def regenerate_study_guide(
                 existing_guide['child_id']
             )
             grade_level = child['grade'] if child else None
-            
+            subject = (concept_name.split('_')[0].strip() or None) if (concept_name and '_' in concept_name) else (concept_name.strip() or None) or existing_guide.get('subject')
             regenerated_guide = await study_guide_service.generate_study_guide(
                 child_id=str(existing_guide['child_id']),
                 concept_name=concept_name,
                 focus_area=existing_guide.get('focus_area', 'General'),
                 grade_level=grade_level,
-                subject=existing_guide.get('subject'),
-                force_regenerate=True
+                subject=subject,
+                force_regenerate=True,
+                language=language,
             )
         else:
             # Regenerate with latest data from evaluation report
@@ -1409,8 +1413,10 @@ async def regenerate_study_guide(
                     else:
                         common_errors_list.append(str(e))
             
-            # Get subject from first test if available
-            subject = existing_guide.get('subject')
+            # Derive subject from concept name (e.g. biology_General -> biology) so we don't reuse a wrong stored subject
+            subject = (concept_name.split('_')[0].strip() or None) if (concept_name and '_' in concept_name) else (concept_name.strip() or None)
+            if not subject:
+                subject = existing_guide.get('subject')
             if not subject and report.get('subject_performance'):
                 subject = report['subject_performance'][0].get('subject') if report['subject_performance'] else None
             
@@ -1423,7 +1429,8 @@ async def regenerate_study_guide(
                 common_errors=common_errors_list if common_errors_list else None,
                 misconceptions=matching_area.get('misconceptions', []),
                 sample_questions=matching_area.get('sample_questions', []),
-                force_regenerate=True  # This will delete old and create new, or update if replace_existing is used
+                force_regenerate=True,  # This will delete old and create new, or update if replace_existing is used
+                language=language,
             )
         
         return {

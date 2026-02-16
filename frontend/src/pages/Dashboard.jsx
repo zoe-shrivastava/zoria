@@ -657,7 +657,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
             {activeTab === 'reports' && (
               <div className="dashboard-section" style={{ padding: 0, height: '100vh', overflow: 'hidden' }}>
                 {childProfile ? (
-                  <LearningWorkspace childId={childProfile.id} daysBack={30} showAllGuides={true} user={user} />
+                  <LearningWorkspace childId={childProfile.id} daysBack={30} showAllGuides={true} user={user} preferredLanguage={childPreferredLanguage} />
                 ) : (
                   <div className="empty-state">
                     <p>Loading profile...</p>
@@ -1004,7 +1004,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       Viewing: <strong style={{ color: 'var(--text-primary)' }}>{childList.find(c => c.id === selectedChild)?.name || 'Child'}</strong>
                     </p>
                   )}
-                  <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} />
+                  <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} preferredLanguage={null} />
                 </>
               ) : childList.length === 0 ? (
                 <div className="empty-state">

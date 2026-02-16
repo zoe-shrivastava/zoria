@@ -1,5 +1,6 @@
 """Service for generating detailed evaluation reports."""
 
+import json
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
@@ -46,7 +47,8 @@ class EvaluationReportService:
         child_id: str,
         days_back: int = 30,
         min_tests: int = 1,
-        generate_study_guides: bool = True
+        generate_study_guides: bool = True,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate comprehensive evaluation report.
         
@@ -55,6 +57,7 @@ class EvaluationReportService:
             days_back: Number of days to look back for tests
             min_tests: Minimum number of tests required for report
             generate_study_guides: Whether to generate study guides for focus areas
+            language: Language for study guides and revision cards (e.g. 'English', 'Hindi'). None = English.
             
         Returns:
             Dictionary with report data
@@ -286,6 +289,13 @@ class EvaluationReportService:
                         if misconception:
                             perf['misconceptions'].append(misconception)
                     
+                    blueprint = (question.get('metadata') or {}).get('blueprint') or {}
+                    if isinstance(blueprint, str):
+                        try:
+                            blueprint = json.loads(blueprint) if blueprint else {}
+                        except Exception:
+                            blueprint = {}
+                    expected = blueprint.get('expected_answer') or blueprint.get('correct_answer') if isinstance(blueprint, dict) else None
                     perf['questions'].append({
                         'question_id': question.get('question_id'),
                         'text': question.get('text', '')[:100] if question.get('text') else '',
@@ -295,7 +305,9 @@ class EvaluationReportService:
                         'has_answer': has_answer,
                         'error_type': question.get('error_type') if has_answer else 'No_Answer',
                         'misconception': question.get('misconception') if has_answer else None,
-                        'detailed_feedback': question.get('detailed_feedback')
+                        'detailed_feedback': question.get('detailed_feedback'),
+                        'answer': question.get('answer'),
+                        'expected_answer': expected
                     })
                 
                 # Track question type performance
@@ -377,9 +389,11 @@ class EvaluationReportService:
                             enriched_errors.append(error_detail)
                     
                     unique_misconceptions = list(set(perf['misconceptions']))[:5]
-                    
+                    # Derive subject from concept name once (e.g. biology_General -> biology) so study guide always gets correct subject
+                    area_subject = (concept.split('_')[0].strip() or None) if (concept and '_' in concept) else (concept.strip() or None)
                     areas_of_focus.append({
                         'concept': concept,
+                        'subject': area_subject,
                         'accuracy': round(accuracy, 1),
                         'score_percentage': round(score_percentage, 1),
                         'questions_count': perf['total_questions'],
@@ -457,19 +471,21 @@ class EvaluationReportService:
                 grade_level = child['grade'] if child else None
                 logger.info(f"Child grade level: {grade_level}")
                 
-                # Get subject from first test if available
-                subject = None
-                if tests:
-                    test_with_questions = await self.test_repo.get_test_with_questions(tests[0]['id'])
-                    if test_with_questions and test_with_questions.get('questions'):
-                        first_q = test_with_questions['questions'][0]
-                        if first_q.get('metadata'):
-                            subject = first_q['metadata'].get('subject')
-                logger.info(f"Subject: {subject}")
-                
+                # Subject will be derived per area from the area's concept (e.g. biology_General -> biology)
                 for idx, area in enumerate(areas_of_focus[:5], 1):  # Generate guides for top 5 focus areas
                     try:
-                        logger.info(f"📚 [{idx}/{min(5, len(areas_of_focus))}] Generating study guide for: '{area['concept']}'")
+                        concept_name = area.get('concept', '') or ''
+                        # Use subject stored on area (derived from concept when building areas); fallback to deriving from concept_name
+                        subject = area.get('subject')
+                        if not subject:
+                            subject = (concept_name.split('_')[0].strip() or None) if concept_name and '_' in concept_name else (concept_name.strip() or None)
+                        if not subject and tests:
+                            test_with_questions = await self.test_repo.get_test_with_questions(tests[0]['id'])
+                            if test_with_questions and test_with_questions.get('questions'):
+                                first_q = test_with_questions['questions'][0]
+                                if first_q.get('metadata'):
+                                    subject = first_q['metadata'].get('subject')
+                        logger.info(f"📚 [{idx}/{min(5, len(areas_of_focus))}] Generating study guide for: '{area['concept']}' (subject={subject})")
                         logger.info(f"   Performance: {area.get('score_percentage', 'N/A')}%, Questions: {area.get('questions_count', 0)}")
                         logger.info(f"   Common errors: {len(area.get('common_errors', []))}, Misconceptions: {len(area.get('misconceptions', []))}")
                         
@@ -590,7 +606,8 @@ class EvaluationReportService:
                             subject=subject,
                             common_errors=common_errors_list if common_errors_list else None,
                             misconceptions=area.get('misconceptions', []),
-                            sample_questions=area.get('sample_questions', [])
+                            sample_questions=area.get('sample_questions', []),
+                            language=language,
                         )
                         
                         logger.info(f"✅ Successfully generated study guide for '{area['concept']}'")

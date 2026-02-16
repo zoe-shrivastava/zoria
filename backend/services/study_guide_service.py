@@ -42,7 +42,8 @@ class StudyGuideService:
         common_errors: Optional[List[str]] = None,
         misconceptions: Optional[List[str]] = None,
         sample_questions: Optional[List[Dict]] = None,
-        force_regenerate: bool = False
+        force_regenerate: bool = False,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate a personalized study guide for a focus area.
         
@@ -56,6 +57,7 @@ class StudyGuideService:
             common_errors: List of common errors made
             misconceptions: List of misconceptions
             sample_questions: Sample questions that were answered incorrectly
+            language: Language for guide and cards (e.g. 'English', 'Hindi', 'Spanish'). None = English.
             
         Returns:
             Dictionary with study guide data
@@ -116,13 +118,17 @@ class StudyGuideService:
             sample_questions=sample_questions or []
         )
         
-        system_prompt = """
+        output_language = (language or "English").strip() or "English"
+        system_prompt = f"""
         You are an expert educational tutor. Your task is to generate a DETAILED, COMPREHENSIVE study guide in Markdown. 
 Because this is for the Zoria Learning System, you must use specific structural patterns that our frontend will transform into interactive "Knowledge Blocks."
 
+## 0. OUTPUT LANGUAGE
+Generate the ENTIRE study guide in **{output_language}** only: all section titles, explanations, analogies, step-by-step content, examples, pitfall descriptions, cheat sheet text, and mastery check. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
+
 ## 1. STRUCTURAL DIRECTIVES
 - **Tone**: Professional, encouraging, and clear (Middle School level).
-- **LaTeX**: Use double-backslashes for all math (e.g., `\\vec{F} = ma`).
+- **LaTeX**: Use double-backslashes for all math (e.g., `\\vec{{F}} = ma`). Write display math as $$...$$ and inline math as $...$ directly in the paragraph—do NOT wrap them in ```latex or ``` code blocks, or the UI will not render the math.
 - **Formatting**: Use Bold for key terms and Blockquotes for "Missions."
 
 ## 2. ZORIA COMPONENT MAPPING
@@ -185,7 +191,7 @@ Please structure your Markdown using these exact section headers so the UI can s
             
             # Generate revision cards using LLM
             logger.info(f"Generating revision cards for {concept_name}")
-            revision_cards = await self._generate_revision_cards(content, concept_name)
+            revision_cards = await self._generate_revision_cards(content, concept_name, language=language)
             logger.info(f"Generated {len(revision_cards)} revision cards")
             
             # Save study guide to database
@@ -274,6 +280,14 @@ Please structure your Markdown using these exact section headers so the UI can s
         sample_questions: List[Dict]
     ) -> str:
         """Build prompt for study guide generation."""
+        # Ensure subject matches concept (e.g. biology_General -> biology). Override if caller passed wrong subject.
+        if concept_name and "_" in concept_name:
+            concept_derived_subject = (concept_name.split("_")[0] or "").strip()
+            if concept_derived_subject and (not subject or concept_derived_subject.lower() != (subject or "").lower()):
+                subject = concept_derived_subject
+        elif concept_name and concept_name.strip() and not subject:
+            subject = concept_name.strip()
+
         prompt_parts = [
             f"Create a comprehensive study guide for: {concept_name}",
             f"",
@@ -285,7 +299,9 @@ Please structure your Markdown using these exact section headers so the UI can s
             prompt_parts.append(f"Grade Level: {grade_level}")
         if subject:
             prompt_parts.append(f"Subject: {subject}")
-        
+        if concept_info:
+            topic_or_subtopic = (concept_info.get('subtopic') or '').strip() or 'General'
+            prompt_parts.append(f"Topic / Subtopic: {topic_or_subtopic}")
         if concept_info:
             source_markdown = concept_info.get('source_markdown', '')
             if source_markdown:
@@ -351,13 +367,44 @@ Please structure your Markdown using these exact section headers so the UI can s
                 prompt_parts.append(f"{i}. {misc}")
         
         if sample_questions:
+            def _num(x, default=0.0):
+                if x is None:
+                    return default
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return default
             prompt_parts.extend([
                 "",
-                "Sample Questions (where errors occurred):",
+                "=" * 60,
+                "PROBLEM QUESTIONS (incorrect or partially correct with answer analysis):",
+                "=" * 60,
+                "",
+                "Use these to tailor the Pitfall Audit and examples. For each: question, student answer, expected answer, score, and feedback.",
+                ""
             ])
             for i, q in enumerate(sample_questions[:3], 1):
-                q_text = q.get('text', '')[:200] if isinstance(q.get('text'), str) else str(q.get('text', ''))[:200]
-                prompt_parts.append(f"{i}. {q_text}")
+                q_text = (q.get('text') or '')[:300] if isinstance(q.get('text'), str) else str(q.get('text', ''))[:300]
+                student_answer = q.get('answer') or '(no answer)'
+                if isinstance(student_answer, str) and len(student_answer) > 200:
+                    student_answer = student_answer[:200] + '...'
+                expected_answer = q.get('expected_answer') or '(not provided)'
+                if isinstance(expected_answer, str) and len(expected_answer) > 200:
+                    expected_answer = expected_answer[:200] + '...'
+                score_str = f"{_num(q.get('score'), 0):.2f}/{_num(q.get('max_score'), 1):.2f}"
+                if q.get('detailed_feedback'):
+                    feedback = (q.get('detailed_feedback') or '')[:400]
+                    if len((q.get('detailed_feedback') or '')) > 400:
+                        feedback += '...'
+                else:
+                    feedback = '(no detailed feedback)'
+                prompt_parts.append(
+                    f"{i}. Question: {q_text}\n"
+                    f"   Student answer: {student_answer}\n"
+                    f"   Expected answer: {expected_answer}\n"
+                    f"   Score: {score_str}\n"
+                    f"   Answer analysis: {feedback}"
+                )
         
         prompt_parts.extend([
     "",
@@ -425,19 +472,22 @@ Please structure your Markdown using these exact section headers so the UI can s
     async def _generate_revision_cards(
         self,
         content: str,
-        concept_name: str
+        concept_name: str,
+        language: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Generate revision cards from study guide content using LLM.
         
         Args:
             content: The study guide markdown content
             concept_name: Name of the concept
+            language: Language for card text (e.g. 'English', 'Hindi'). None = English.
             
         Returns:
             List of revision card objects with 'front' and 'back' keys
         """
+        output_lang = (language or "English").strip() or "English"
         prompt = f"""
-Extract revision cards from this study guide for {concept_name}:
+Extract revision cards from this study guide for {concept_name}. Write ALL card "front" and "back" text in **{output_lang}** only. Keep LaTeX and math unchanged.
 
 {content}
 
@@ -469,9 +519,12 @@ Review the provided text and generate:
 ]
 """
 
-        system_prompt = """
+        system_prompt = f"""
 # Role: Expert Educational Content Extractor (Llama 3.1)
 You are a specialist in transforming long-form Study Guides into high-utility active recall Revision Cards.
+
+## 0. OUTPUT LANGUAGE
+Generate ALL "front" and "back" text for every card in **{output_lang}** only. Keep LaTeX and math notation unchanged. If the language is a code (en, hi, es), use the full language name (English, Hindi, Spanish).
 
 ## 1. EXTRACTION & AUDIT PROTOCOL
 - **Definitions**: Identify core terms. Format: Front: "What is [Term]?"; Back: Scientific definition.
@@ -480,7 +533,7 @@ You are a specialist in transforming long-form Study Guides into high-utility ac
     - Include the COMPLETE problem statement in the "front" field - do NOT truncate with "..."
     - Include every numbered step from the text in the "back" field.
     - **Logic Guardrail**: If the source text suggests a formula that does not match the variables given (e.g., using F=ma when only velocity/time are provided), you must correct the logic to use the mathematically sound formula.
-- **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` is properly closed. Verify syntax like `\\text{m s}^{-1}`.
+- **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` is properly closed. Verify syntax like `\\text{{m s}}^{{-1}}`.
 
 ## 2. FORMATTING & JSON SAFETY (CRITICAL)
 - **JSON Structure**: Output a RAW JSON ARRAY only. 

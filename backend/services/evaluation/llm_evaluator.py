@@ -39,7 +39,7 @@ Use the following criteria to ensure objective and granular grading. Scores must
 | **3.5** | **Minor Slip** | **Mechanical Error.** Correct conceptual path and logic, but includes a non-conceptual typo (e.g., arithmetic error or missing units). |
 | **2.5** | **Partial Mastery** | **Procedural Error.** Correct identification of principles/formulas, but the execution breaks down significantly or is incomplete. |
 | **1.0** | **Conceptual Pivot** | **Fundamental Misunderstanding.** The student attempts to answer using relevant terminology but applies the wrong logic, formula, or framework. |
-| **0.0** | **No Merit** | **Non-Responsive.** The answer is blank, contains gibberish (e.g., "abcd"), or is entirely irrelevant to the prompt. |
+| **0.0** | **No Merit** | **Non-Responsive.** The answer is blank, contains gibberish (e.g., "abcd"), or is entirely irrelevant to the question. |
 
 ---
 

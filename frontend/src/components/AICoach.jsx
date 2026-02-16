@@ -15,7 +15,8 @@ export default function AICoach({
   onNavigateTab,
   userName = 'You',
   isWorkspaceMode = false,
-  disableChat = false
+  disableChat = false,
+  preferredLanguage = null,
 }) {
   const [messages, setMessages] = useState([])
   const [inputMessage, setInputMessage] = useState('')
@@ -610,6 +611,7 @@ export default function AICoach({
                 guideId={guideId}
                 contextPayload={contextPayload}
                 onNavigateToCards={() => onNavigateTab?.('CARDS')}
+                preferredLanguage={preferredLanguage}
               />
             </div>
           )}

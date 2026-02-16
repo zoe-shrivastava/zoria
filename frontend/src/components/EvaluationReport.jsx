@@ -7,7 +7,7 @@ import AICoach from './AICoach'
 import { showNotification } from '../utils/notifications'
 import { useLearningContext } from './LearningWorkspace'
 
-export default function EvaluationReport({ childId, daysBack = 30, showAllGuides = false, user = null, isWorkspaceMode = false }) {
+export default function EvaluationReport({ childId, daysBack = 30, showAllGuides = false, user = null, isWorkspaceMode = false, preferredLanguage = null }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -56,7 +56,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
     
     try {
       showNotification('Regenerating study guide...', 'info')
-      const result = await tests.regenerateStudyGuide(guideId)
+      const result = await tests.regenerateStudyGuide(guideId, preferredLanguage)
       showNotification('Study guide regenerated successfully', 'success')
       // Reload the report to get updated study guides
       await loadReport()
@@ -75,7 +75,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
     if (showAllGuides) {
       loadAllGuides()
     }
-  }, [childId, daysBack, showAllGuides])
+  }, [childId, daysBack, showAllGuides, preferredLanguage])
 
   // Debug drawer state changes
   useEffect(() => {
@@ -139,7 +139,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
       setLoading(true)
       setError(null)
       console.log('Loading evaluation report for child:', childId, 'daysBack:', daysBack)
-      const data = await tests.getEvaluationReport(childId, daysBack, true)
+      const data = await tests.getEvaluationReport(childId, daysBack, true, preferredLanguage)
       console.log('Evaluation report loaded:', data)
       setReport(data)
     } catch (err) {
@@ -921,8 +921,9 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
         ) : study_guide_links && study_guide_links.length > 0 ? (
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-            gap: '1rem'
+            gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+            gap: '1rem',
+            maxWidth: '100%'
           }}>
             {study_guide_links.map((link) => {
               const guide = allGuides?.find(g => g.id === link.guide_id) || {
@@ -958,7 +959,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     transition: 'all 0.2s',
                     display: 'flex',
                     flexDirection: 'column',
-                    minHeight: '120px',
+                    aspectRatio: '1',
+                    minHeight: 0,
                     justifyContent: 'space-between',
                     position: 'relative'
                   }}
@@ -1039,12 +1041,15 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                       return (
                         <div style={{ 
                           fontSize: '0.7rem', 
-                          color: 'var(--text-color)',
+                          color: 'var(--text-muted)',
                           marginTop: '0.5rem'
                         }}>
-                          {date.toLocaleDateString(undefined, {
+                          {date.toLocaleString(undefined, {
                             month: 'short',
-                            day: 'numeric'
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
                           })}
                         </div>
                       )
@@ -1097,6 +1102,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
             setCoachGuideId(guideId)
             setCoachContext(context)
           }}
+          preferredLanguage={preferredLanguage}
         />
       )}
 
@@ -1144,6 +1150,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
             <StudyGuide 
               guideId={selectedGuideId} 
               onClose={() => setSelectedGuideId(null)}
+              preferredLanguage={preferredLanguage}
             />
           </div>
         </div>
