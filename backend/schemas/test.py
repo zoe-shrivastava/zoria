@@ -17,6 +17,7 @@ class TestGenerateRequest(BaseModel):
     difficulty: Optional[str] = Field(None, description="Filter by difficulty (easy, medium, hard)")
     num_questions: int = Field(10, ge=1, le=50, description="Number of questions")
     time_limit_minutes: Optional[int] = Field(None, ge=1, description="Time limit in minutes")
+    language: Optional[str] = Field(None, description="Language for generated questions (e.g. 'English', 'Hindi', 'Spanish')")
 
 
 class QuestionGenerateRequest(BaseModel):
@@ -27,6 +28,7 @@ class QuestionGenerateRequest(BaseModel):
     difficulty: Optional[str] = Field(None, description="Difficulty level (easy, medium, hard)")
     grade_level: int = Field(8, ge=1, le=12, description="Grade level for age-appropriate language")
     similarity_threshold: float = Field(0.85, ge=0.0, le=1.0, description="Similarity threshold for deduplication")
+    language: Optional[str] = Field(None, description="Language for question text, options, hints, and solutions (e.g. 'en', 'hi', 'es', or 'English', 'Hindi', 'Spanish'). If not set, questions are generated in English.")
 
 
 class TestQuestionResponse(BaseModel):

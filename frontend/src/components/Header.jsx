@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import './TabNavigation.css'
 
-export default function Header({ user, onLogout, tabs = null, activeTab = null, onTabChange = null, userProfile = null }) {
+export default function Header({ user, onLogout, tabs = null, activeTab = null, onTabChange = null, userProfile = null, selectedLanguage = null, onLanguageChange = null, languageOptions = [] }) {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const userMenuRef = useRef(null)
 
@@ -95,6 +95,37 @@ export default function Header({ user, onLogout, tabs = null, activeTab = null, 
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Language selector (child portal only) */}
+        {onLanguageChange && languageOptions.length > 0 && (
+          <div className="header-language-wrap" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+            <label htmlFor="header-language-select" className="header-language-label" style={{ marginRight: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+              Language
+            </label>
+            <select
+              id="header-language-select"
+              value={selectedLanguage ?? ''}
+              onChange={(e) => onLanguageChange(e.target.value)}
+              className="header-language-select"
+              style={{
+                padding: '0.5rem 0.75rem',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.9rem',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-color)',
+                cursor: 'pointer',
+                minWidth: '120px'
+              }}
+            >
+              {languageOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label ?? opt.value}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 

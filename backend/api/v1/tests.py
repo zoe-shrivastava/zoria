@@ -397,6 +397,7 @@ async def generate_test(
                 difficulty=request.difficulty,
                 num_questions=request.num_questions,
                 time_limit_minutes=request.time_limit_minutes,
+                language=request.language,
             )
             test = pending_test
         elif request.subject and request.topics:
@@ -426,6 +427,7 @@ async def generate_test(
                 difficulty=request.difficulty,
                 num_questions=request.num_questions,
                 time_limit_minutes=request.time_limit_minutes,
+                language=request.language,
             )
             test = pending_test
         else:
@@ -459,8 +461,8 @@ async def generate_test(
             concept_id=uuid_to_str(test.get('concept_id')),
             title=test['title'],
             status=test['status'],
-            total_score=float(test['total_score']) if test.get('total_score') else None,
-            max_score=float(test['max_score']) if test.get('max_score') else None,
+            total_score=float(test['total_score']) if test.get('total_score') is not None else None,
+            max_score=float(test['max_score']) if test.get('max_score') is not None else None,
             started_at=test.get('started_at'),
             completed_at=test.get('completed_at'),
             time_limit_minutes=test.get('time_limit_minutes'),
@@ -498,8 +500,10 @@ async def generate_questions(
         "question_type": "multiple_choice",
         "difficulty": "medium",
         "grade_level": 8,
-        "similarity_threshold": 0.85
+        "similarity_threshold": 0.85,
+        "language": "hi"
     }
+    Optional "language" (e.g. "en", "hi", "es" or "English", "Hindi", "Spanish") makes the LLM generate questions in that language.
     """
     try:
         # Access control - only parents and admins can generate questions
@@ -528,7 +532,8 @@ async def generate_questions(
             question_type=request.question_type,
             difficulty=request.difficulty,
             grade_level=request.grade_level,
-            similarity_threshold=request.similarity_threshold
+            similarity_threshold=request.similarity_threshold,
+            language=request.language,
         )
         
         return {
@@ -668,8 +673,8 @@ async def get_test(
             concept_id=uuid_to_str(test.get('concept_id')),
             title=test['title'],
             status=test['status'],
-            total_score=float(test['total_score']) if test.get('total_score') else None,
-            max_score=float(test['max_score']) if test.get('max_score') else None,
+            total_score=float(test['total_score']) if test.get('total_score') is not None else None,
+            max_score=float(test['max_score']) if test.get('max_score') is not None else None,
             started_at=test.get('started_at'),
             completed_at=test.get('completed_at'),
             time_limit_minutes=test.get('time_limit_minutes'),
@@ -745,8 +750,8 @@ async def list_tests_for_child(
                 concept_id=uuid_to_str(test.get('concept_id')),
                 title=test['title'],
                 status=test['status'],
-                total_score=float(test['total_score']) if test.get('total_score') else None,
-                max_score=float(test['max_score']) if test.get('max_score') else None,
+                total_score=float(test['total_score']) if test.get('total_score') is not None else None,
+                max_score=float(test['max_score']) if test.get('max_score') is not None else None,
                 started_at=test.get('started_at'),
                 completed_at=test.get('completed_at'),
                 time_limit_minutes=test.get('time_limit_minutes'),
@@ -814,8 +819,8 @@ async def list_all_tests_grouped_by_child(
                     started_at=test.get('started_at'),
                     completed_at=test.get('completed_at'),
                     time_limit_minutes=test.get('time_limit_minutes'),
-                    total_score=float(test.get('total_score')) if test.get('total_score') else None,
-                    max_score=float(test.get('max_score')) if test.get('max_score') else None,
+                    total_score=float(test.get('total_score')) if test.get('total_score') is not None else None,
+                    max_score=float(test.get('max_score')) if test.get('max_score') is not None else None,
                     metadata=test.get('metadata', {}),
                     questions=[]  # Don't include questions in list view
                 ))

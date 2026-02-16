@@ -169,6 +169,10 @@ zoria/
 
 ## Documentation
 
+- [Architecture & Features (Business)](docs/ARCHITECTURE_AND_FEATURES_BUSINESS.md) - High-level overview for product and business users
+- [Architecture & Features (Technical)](docs/ARCHITECTURE_AND_FEATURES_TECHNICAL.md) - High-level technical architecture and feature map
+- [Architecture Diagrams](docs/ARCHITECTURE_DIAGRAM.md) - Mermaid diagrams (system context, deployment, components, flows)
+- [Detailed Flows](docs/DETAILED_FLOWS.md) - Document ingestion, test generation & evaluation, and reports (end-to-end)
 - [Development Guide](DEVELOPMENT.md) - Development setup and guidelines
 - [Phase 2 Complete](PHASE2_COMPLETE.md) - Backend implementation details
 - [Frontend Complete](FRONTEND_COMPLETE.md) - Frontend implementation details

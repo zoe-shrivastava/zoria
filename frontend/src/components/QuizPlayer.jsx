@@ -2182,7 +2182,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
               {test.total_score}/{test.max_score} points
             </div>
             <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-              {test.total_score && test.max_score
+              {test.total_score != null && test.max_score != null && test.max_score > 0
                 ? `Percentage: ${((test.total_score / test.max_score) * 100).toFixed(1)}%`
                 : null}
             </div>

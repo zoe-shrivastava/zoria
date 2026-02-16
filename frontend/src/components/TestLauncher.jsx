@@ -3,7 +3,7 @@ import { tests } from '../services/api'
 import { showNotification } from '../utils/notifications'
 import LoadingSpinner from './LoadingSpinner'
 
-export default function TestLauncher({ childId, onTestGenerated, userRole }) {
+export default function TestLauncher({ childId, onTestGenerated, userRole, preferredLanguage = null }) {
   const [subjectsData, setSubjectsData] = useState([])
   const [selectedSubject, setSelectedSubject] = useState('')
   const [selectedTopics, setSelectedTopics] = useState([])
@@ -94,6 +94,10 @@ export default function TestLauncher({ childId, onTestGenerated, userRole }) {
 
       if (timeLimit) {
         testData.time_limit_minutes = parseInt(timeLimit)
+      }
+
+      if (preferredLanguage) {
+        testData.language = preferredLanguage
       }
 
       const test = await tests.generate(testData)

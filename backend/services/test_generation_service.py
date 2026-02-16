@@ -201,7 +201,8 @@ class TestGenerationService:
         include_prerequisites: bool = False,
         difficulty: Optional[str] = None,
         num_questions: int = 10,
-        time_limit_minutes: Optional[int] = None
+        time_limit_minutes: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> None:
         """Generate questions and attach them to an existing draft test (concept mode)."""
         concept, concept_ids, sections = await self._generate_sections_for_concept(
@@ -304,6 +305,7 @@ class TestGenerationService:
                     subject_id=subject_id,
                     selected_topics=None,
                     subject_profile=subject_profile,
+                    language=language,
                 )
                 
                 # Add safety check
@@ -662,7 +664,8 @@ class TestGenerationService:
         include_prerequisites: bool = False,
         difficulty: Optional[str] = None,
         num_questions: int = 10,
-        time_limit_minutes: Optional[int] = None
+        time_limit_minutes: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> None:
         """Generate questions and attach them to an existing draft test (topics mode)."""
         matched_concept_ids, sections = await self._generate_sections_for_topics(
@@ -671,7 +674,8 @@ class TestGenerationService:
             topics=topics,
             include_prerequisites=include_prerequisites,
             difficulty=difficulty,
-            num_questions=num_questions
+            num_questions=num_questions,
+            language=language,
         )
         
         # Merge/update metadata on existing test
@@ -707,7 +711,8 @@ class TestGenerationService:
         topics: List[str],
         include_prerequisites: bool,
         difficulty: Optional[str],
-        num_questions: int
+        num_questions: int,
+        language: Optional[str] = None,
     ):
         """Shared logic: generate sections for a subject/topics combo (no test creation)."""
         # Find concepts that match the topics
@@ -853,6 +858,7 @@ class TestGenerationService:
                     subject_id=subject_id,
                     selected_topics=topics,
                     subject_profile=subject_profile,
+                    language=language,
                 )
                 
                 # Add safety check

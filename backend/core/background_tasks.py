@@ -223,7 +223,8 @@ async def enqueue_test_generation_from_concept(
     include_prerequisites: bool,
     difficulty: Optional[str],
     num_questions: int,
-    time_limit_minutes: Optional[int]
+    time_limit_minutes: Optional[int],
+    language: Optional[str] = None,
 ) -> None:
     """Enqueue background test generation for a single concept."""
     async def process_test():
@@ -254,6 +255,7 @@ async def enqueue_test_generation_from_concept(
                 difficulty=difficulty,
                 num_questions=num_questions,
                 time_limit_minutes=time_limit_minutes,
+                language=language,
             )
         except Exception as e:
             logger.error(f"Background test generation failed for test {test_id}: {e}", exc_info=True)
@@ -302,7 +304,8 @@ async def enqueue_test_generation_from_topics(
     include_prerequisites: bool,
     difficulty: Optional[str],
     num_questions: int,
-    time_limit_minutes: Optional[int]
+    time_limit_minutes: Optional[int],
+    language: Optional[str] = None,
 ) -> None:
     """Enqueue background test generation for subject/topics."""
     async def process_test():
@@ -333,6 +336,7 @@ async def enqueue_test_generation_from_topics(
                 difficulty=difficulty,
                 num_questions=num_questions,
                 time_limit_minutes=time_limit_minutes,
+                language=language,
             )
         except Exception as e:
             logger.error(f"Background topic-based test generation failed for test {test_id}: {e}", exc_info=True)

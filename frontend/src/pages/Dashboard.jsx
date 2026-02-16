@@ -13,12 +13,25 @@ import LearningWorkspace from '../components/LearningWorkspace'
 import { children, documents, child, isAuthError } from '../services/api'
 import { showNotification } from '../utils/notifications'
 
+// Language options for child portal (later can be driven by profile preferences)
+const CHILD_LANGUAGE_OPTIONS = [
+  { value: 'English', label: 'English' },
+  { value: 'Hindi', label: 'Hindi' },
+  { value: 'Spanish', label: 'Spanish' },
+]
+
+const CHILD_LANGUAGE_STORAGE_KEY = 'zoria_child_language'
+
 export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }) {
   const isParent = user?.role === 'parent'
   const isChild = user?.role === 'child'
   const [childList, setChildList] = useState([])
   const [selectedChild, setSelectedChild] = useState(null)
   const [childProfile, setChildProfile] = useState(null)
+  const [childPreferredLanguage, setChildPreferredLanguage] = useState(() => {
+    if (typeof window === 'undefined') return 'English'
+    return window.localStorage.getItem(CHILD_LANGUAGE_STORAGE_KEY) || 'English'
+  })
   const [loading, setLoading] = useState(true)
   const [showCreateChild, setShowCreateChild] = useState(false)
   const [editingChild, setEditingChild] = useState(null)
@@ -521,10 +534,26 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
 
   // Child dashboard with profile and documents
   if (isChild) {
+    const handleChildLanguageChange = (value) => {
+      setChildPreferredLanguage(value)
+      try {
+        window.localStorage.setItem(CHILD_LANGUAGE_STORAGE_KEY, value)
+      } catch (_) {}
+    }
+
     if (loading) {
       return (
         <div className="dashboard">
-          <Header user={user} onLogout={onLogout} userProfile={user} />
+          <Header
+            user={user}
+            onLogout={onLogout}
+            userProfile={user}
+            tabs={[{ id: 'profile', label: 'My Profile' }, { id: 'documents', label: 'My Documents' }, { id: 'tests', label: 'Tests' }, { id: 'reports', label: 'Reports' }]}
+            activeTab="profile"
+            selectedLanguage={childPreferredLanguage}
+            onLanguageChange={handleChildLanguageChange}
+            languageOptions={CHILD_LANGUAGE_OPTIONS}
+          />
           <div className="dashboard-content">
             <p className="loading-text">Loading...</p>
           </div>
@@ -548,6 +577,9 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
           activeTab={activeTab}
           onTabChange={setActiveTab}
           userProfile={childProfile || user}
+          selectedLanguage={childPreferredLanguage}
+          onLanguageChange={handleChildLanguageChange}
+          languageOptions={CHILD_LANGUAGE_OPTIONS}
         />
         <div className="dashboard-content">
 
@@ -668,6 +700,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                           <TestLauncher
                             childId={childProfile.id}
                             userRole={user?.role}
+                            preferredLanguage={childPreferredLanguage}
                             onTestGenerated={(test) => {
                               // Don't auto-open test - just show notification
                               // Test will appear in list with "Processing" status

@@ -186,6 +186,7 @@ class QuestionGenerationService:
         subject_id: Optional[str] = None,
         selected_topics: Optional[List[str]] = None,
         subject_profile: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Generate all questions in a single LLM request.
         
@@ -198,6 +199,7 @@ class QuestionGenerationService:
             subject_id: Subject ID for subject-specific generation rules
             selected_topics: List of selected topics
             subject_profile: Subject profile JSON dictionary
+            language: Language for question text, options, hints, solutions (e.g. 'en', 'hi', 'English', 'Hindi'). None = English.
             
         Returns:
             List of generated question dictionaries (blueprint + raw)
@@ -261,11 +263,14 @@ class QuestionGenerationService:
             or subject_id
             or "unknown"
         )
-        
+        output_language = (language or "English").strip() or "English"
 
         # Build system prompt (keep this concise; put profile/context/schema into the user prompt)
         system_prompt = f"""## System Instruction
 You are a high-fidelity Assessment Engine. Your goal is to transform provided Study Context into {num_questions} unique, application-level test questions.
+
+### Output Language
+Generate ALL of the following in **{output_language}** only: question_text, options (A–D), hint, solution_steps, expected_answer, and any explanatory text. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
 
 ### Execution Rules:
 1. **Transformation:** Do not repeat the study guide questions verbatim. If the context provides an equation, create a question where the student must identify its properties (intercepts, vertex, growth) or apply it to a scenario.
@@ -506,6 +511,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         subject_id: Optional[str] = None,
         selected_topics: Optional[List[str]] = None,
         subject_profile: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Generate all questions for multiple concepts in a single LLM request.
         
@@ -518,6 +524,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             subject_id: Subject ID for subject-specific generation rules
             selected_topics: List of selected topics
             subject_profile: Subject profile JSON dictionary
+            language: Language for question text, options, hints, solutions (e.g. 'en', 'hi'). None = English.
             
         Returns:
             Dictionary mapping concept_id to list of generated question dictionaries (blueprint + raw)
@@ -596,7 +603,8 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             or subject_id
             or "unknown"
         )
-        
+        output_language = (language or "English").strip() or "English"
+
         # Build dynamic JSON schema that supports all question types (same as single-concept method)
         json_schema = """{{
   "questions": [
@@ -644,6 +652,9 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         system_prompt = """## System Instruction
 **Role:** You are a high-fidelity **Question Engine**. Your goal is to transform the provided **Study Context** into exactly `{num_questions}` unique, application-level test questions for `{target_subject}` (`{grade_level}`).
 
+### 0. Output Language
+Generate ALL of the following in **{output_language}** only: question_text, options (A–D), hint, solution_steps, expected_answer, and any explanatory text. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
+
 ---
 
 ### 1. Universal Execution Rules
@@ -690,6 +701,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             target_subject=target_subject,
             grade_level=grade_level,
             difficulty=difficulty,
+            output_language=output_language,
             subject_profile_json=subject_profile_json,
             context_text=context_text,
             json_schema_placeholder=json_schema_formatted
@@ -1084,6 +1096,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         selected_topics: Optional[List[str]] = None,
         force_generate: bool = False,
         subject_profile: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate multiple questions for a concept with deduplication.
         
@@ -1099,6 +1112,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             selected_topics: List of selected topics
             force_generate: Force generation even if pool is sufficient
             subject_profile: Subject profile JSON dictionary
+            language: Language for question text, options, hints, solutions (e.g. 'en', 'hi'). None = English.
             
         Returns:
             Dictionary with generation results
@@ -1153,6 +1167,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
                     subject_id=subject_id,
                     selected_topics=selected_topics,
                 subject_profile=subject_profile,
+                language=language,
                 )
             
             # Process each generated question: check duplicates and store
