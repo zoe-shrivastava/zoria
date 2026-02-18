@@ -72,6 +72,7 @@ concept_extrator = Agent(
     output_type=ConceptExtratorSchema,
     model_settings=ModelSettings(
         store=True,
+        max_tokens=32000,  # High limit so long study guides yield full concept list and all questions
         reasoning=Reasoning(
             effort="low",
             summary="auto"
@@ -348,8 +349,10 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
         # Extract subject_name from concepts output (no need for separate LLM call)
         extracted_subject = None
         concepts_list = concept_extrator_result["output_parsed"].get("concepts", [])
-        logger.info(f"Extracted {len(concepts_list)} concepts from output")
-        
+        total_questions = sum(len(c.get("questions", [])) for c in concepts_list)
+        logger.info(f"Extracted {len(concepts_list)} concepts and {total_questions} total questions from output")
+        if len(concepts_list) == 1 and total_questions < 10:
+            logger.warning("Only one concept with few questions—possible truncation or over-grouping; check max_tokens and prompt.")
         if len(concepts_list) == 0:
             logger.warning("⚠️  ZERO CONCEPTS EXTRACTED!")
             logger.warning(f"Output structure: {list(concept_extrator_result['output_parsed'].keys())}")

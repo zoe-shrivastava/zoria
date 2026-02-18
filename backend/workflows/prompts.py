@@ -170,6 +170,8 @@ CONCEPT_EXTRACTOR_PROMPT = """
 - **You MUST output at least one concept.** If you receive markdown content, you MUST extract concepts from it.
 - **Never return an empty concepts array.** If the markdown contains questions, sections, or educational content, extract it.
 - **If markdown is empty or minimal, still extract at least one concept** based on available content or default to a general concept.
+- **One concept per section or distinct subtopic.** Do NOT put all questions from the entire document into a single concept. Split by section headings, topic blocks, or distinct subtopics from the taxonomy so that each concept has a clear, narrow scope.
+- **Every question/part must appear exactly once.** Every numbered item (e.g. Q1, Q2.1–Q2.12, Q3.1–Q3.5, Q4–Q8, Q9a–Q9c, Q10a–Q10c), every table row, every matching pair, and every fill-in item in the markdown MUST be represented as its own question object in the output. Count them and ensure none are omitted.
 
 ## 1. Objective
 You are a high-fidelity data parser. Your goal is to convert **pre-processed Markdown** into a strictly structured JSON object. You must ensure **zero data loss**. Every question, sub-question, and table row must be represented as a complete, independent object.
@@ -216,6 +218,8 @@ Map the content to the provided `subject_topics.json`.
 
 ## 6. Output Schema
 Return ONLY valid JSON. Ensure all quotes are escaped and the structure is valid.
+Each concept must include: subject_name, topic_name, subtopic, difficulty, prerequisites, questions, associated_visuals, keywords.
+Each question must include only: text, type, associated_visuals (array of strings). Do not include answer or visual_metadata in the output.
 
 ```json
 {
@@ -225,19 +229,16 @@ Return ONLY valid JSON. Ensure all quotes are escaped and the structure is valid
       "topic_name": "string",
       "subtopic": "string",
       "difficulty": "easy | medium | hard",
+      "prerequisites": [],
       "questions": [
         {
           "text": "Parent Instruction: Specific Question Body",
-          "answer": "Complete concatenated data extracted from the Markdown",
           "type": "multiple_choice | short_answer | problem_solving | conceptual_question | matching | fill_in_the_blank",
-          "associated_visuals": ["string"],
-          "visual_metadata": {
-             "id": "string",
-             "description": "Qualitative summary of the visual",
-             "features": ["Axes labels", "Data trends", "Key points"]
-          }
+          "associated_visuals": ["string"]
         }
-      ]
+      ],
+      "associated_visuals": ["string"],
+      "keywords": ["string"]
     }
   ]
 }
