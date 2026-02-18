@@ -275,11 +275,16 @@ export default function MathText({ text, inline = false }) {
         normalized = normalized.replace(/\\f\\f([\d\{])/g, '\\frac{$1}')
         normalized = normalized.replace(/\\f\\f/g, '\\frac')
         
-        // Replace 4+ consecutive backslashes with 2 backslashes
-        // This handles double-escaping that can occur in JSON serialization
-        // Pattern: \\\\ (4 backslashes) or more -> \\ (2 backslashes)
-        // Match 4 or more backslashes and replace with exactly 2
-        normalized = normalized.replace(/(\\\\){2,}/g, '\\\\')
+        // Collapse over-escaped backslashes so KaTeX gets single backslash (e.g. \text, \frac)
+        // Quiz/API may send \\ in the string; KaTeX needs \ - collapse each \\ to \ until done
+        let prev
+        while (prev !== normalized) {
+          prev = normalized
+          normalized = normalized.replace(/\\\\/g, '\\')
+        }
+        // KaTeX does not support \textDelta / \textdelta
+        normalized = normalized.replace(/\\textDelta/g, '\\Delta')
+        normalized = normalized.replace(/\\textdelta/g, '\\delta')
         
         // Fix standalone "ext{" -> "\text{" (lost backslash; e.g. " 	ext{Dollar}" in plain text)
         // Only when preceded by start or whitespace/tab so we don't break "context{"
@@ -338,6 +343,10 @@ export default function MathText({ text, inline = false }) {
       allDollarExpressions.forEach(({ placeholder, original }) => {
         finalText = finalText.replace(placeholder, original)
       })
+      // Ensure no double backslashes reach KaTeX (quiz/API may send \\text; KaTeX needs \text)
+      while (finalText.includes('\\\\')) {
+        finalText = finalText.replace(/\\\\/g, '\\')
+      }
 
       // Set raw HTML so KaTeX auto-render can see delimiters like $...$, $$...$$, \\(...\\), \\[...\\]
       el.innerHTML = finalText

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Header from '../components/Header'
 import DocumentUpload from '../components/DocumentUpload'
 import DocumentList from '../components/DocumentList'
@@ -46,6 +46,17 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
   const [viewingReport, setViewingReport] = useState(false)
   const [reportChildId, setReportChildId] = useState(null)
 
+  // Language options for child: at most 2 — English + user's default (from profile)
+  const childLanguageOptions = useMemo(() => {
+    if (!isChild) return CHILD_LANGUAGE_OPTIONS
+    const fromProfile = childProfile?.preferred_language
+    const options = [{ value: 'English', label: 'English' }]
+    if (fromProfile && fromProfile !== 'English') {
+      options.push({ value: fromProfile, label: fromProfile })
+    }
+    return options
+  }, [isChild, childProfile?.preferred_language])
+
   useEffect(() => {
     if (isParent || isAdmin) {
       loadChildren()
@@ -55,6 +66,15 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
       setLoading(false)
     }
   }, [isParent, isChild, isAdmin])
+
+  // Refetch child profile when switching to My Profile tab so parent-updated data is shown
+  useEffect(() => {
+    if (isChild && activeTab === 'profile' && childProfile?.id) {
+      child.getProfile()
+        .then((profile) => setChildProfile(profile))
+        .catch(() => {})
+    }
+  }, [isChild, activeTab])
 
   useEffect(() => {
     if (activeTab === 'overview' || activeTab === 'documents') {
@@ -73,6 +93,13 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
       const profile = await child.getProfile()
       setChildProfile(profile)
       setSelectedChild(profile.id) // Set selected child to their own ID for documents
+      // Default language from profile; child can change to English or back to profile language
+      const profileLang = profile.preferred_language || ''
+      const defaultLang = profileLang || (typeof window !== 'undefined' ? window.localStorage.getItem(CHILD_LANGUAGE_STORAGE_KEY) : null) || 'English'
+      setChildPreferredLanguage(defaultLang)
+      if (typeof window !== 'undefined' && defaultLang) {
+        try { window.localStorage.setItem(CHILD_LANGUAGE_STORAGE_KEY, defaultLang) } catch (_) {}
+      }
       // Load document count and test count
       if (profile.id) {
         const docData = await documents.list(profile.id)
@@ -534,11 +561,17 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
 
   // Child dashboard with profile and documents
   if (isChild) {
-    const handleChildLanguageChange = (value) => {
+    const handleChildLanguageChange = async (value) => {
       setChildPreferredLanguage(value)
       try {
         window.localStorage.setItem(CHILD_LANGUAGE_STORAGE_KEY, value)
       } catch (_) {}
+      try {
+        await child.updateProfile({ preferred_language: value || undefined })
+      } catch (e) {
+        // Non-blocking; UI already updated
+        if (!isAuthError(e)) showNotification('Language saved locally; could not update profile.', 'info')
+      }
     }
 
     if (loading) {
@@ -552,7 +585,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
             activeTab="profile"
             selectedLanguage={childPreferredLanguage}
             onLanguageChange={handleChildLanguageChange}
-            languageOptions={CHILD_LANGUAGE_OPTIONS}
+            languageOptions={childLanguageOptions}
           />
           <div className="dashboard-content">
             <p className="loading-text">Loading...</p>
@@ -579,7 +612,7 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
           userProfile={childProfile || user}
           selectedLanguage={childPreferredLanguage}
           onLanguageChange={handleChildLanguageChange}
-          languageOptions={CHILD_LANGUAGE_OPTIONS}
+          languageOptions={childLanguageOptions}
         />
         <div className="dashboard-content">
 
@@ -624,6 +657,46 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       <div style={{ marginBottom: '1rem' }}>
                         <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Age</div>
                         <div style={{ fontSize: '1rem', color: 'var(--text-primary)' }}>{childProfile.age} years old</div>
+                      </div>
+                    )}
+                    {(childProfile.preferred_language || childProfile.interaction_tone || childProfile.example_preferences || childProfile.interests || childProfile.sensitive_topics_to_avoid != null || childProfile.prefer_indirect_guidance) && (
+                      <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: '600' }}>Study preferences</div>
+                        {childProfile.preferred_language && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Language: </span>
+                            <span style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{childProfile.preferred_language}</span>
+                          </div>
+                        )}
+                        {childProfile.interaction_tone && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Tone: </span>
+                            <span style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{childProfile.interaction_tone}</span>
+                          </div>
+                        )}
+                        {childProfile.example_preferences && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Example style: </span>
+                            <span style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{childProfile.example_preferences}</span>
+                          </div>
+                        )}
+                        {childProfile.interests && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Interests: </span>
+                            <span style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{childProfile.interests}</span>
+                          </div>
+                        )}
+                        {childProfile.sensitive_topics_to_avoid != null && childProfile.sensitive_topics_to_avoid !== '' && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Topics to avoid: </span>
+                            <span style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{childProfile.sensitive_topics_to_avoid}</span>
+                          </div>
+                        )}
+                        {childProfile.prefer_indirect_guidance && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Prefer indirect guidance for emotional topics</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

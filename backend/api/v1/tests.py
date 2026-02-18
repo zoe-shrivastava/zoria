@@ -3,7 +3,7 @@
 import json
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, BackgroundTasks
 from datetime import datetime
 
 from schemas.test import (
@@ -662,7 +662,8 @@ async def get_test(
                     answer=q.get('answer') if user_role == "child" or test['status'] == 'completed' else None,
                     score=q.get('score') if test['status'] == 'completed' else None,
                     is_correct=q.get('is_correct') if test['status'] == 'completed' else None,
-                    detailed_feedback=detailed_feedback
+                    detailed_feedback=detailed_feedback,
+                    response_metadata=q.get('response_metadata') if isinstance(q.get('response_metadata'), dict) else None
                 )
             )
         
@@ -756,7 +757,8 @@ async def list_tests_for_child(
                 completed_at=test.get('completed_at'),
                 time_limit_minutes=test.get('time_limit_minutes'),
                 created_at=test['created_at'],
-                questions=[]  # Don't include questions in list view
+                questions=[],  # Don't include questions in list view
+                metadata=test.get('metadata', {})
             ))
         
         return TestListResponse(tests=test_responses, total=len(test_responses))
@@ -895,7 +897,7 @@ async def start_test(
         
         questions = [
             TestQuestionResponse(
-                question_id=q.get('question_id', q.get('id')),
+                question_id=uuid_to_str(q.get('question_id', q.get('id'))),
                 text=q.get('text', ''),
                 type=q.get('type', 'short_answer'),
                 difficulty=q.get('difficulty'),
@@ -1047,6 +1049,25 @@ async def submit_test(
         # Update mastery
         mastery_result = await mastery_service.update_mastery_from_test(test_id)
         
+        # Infer session state from behavioral data and store on test
+        try:
+            from services.state_inference import infer_session_state
+            test_with_questions = await test_repo.get_test_with_questions(test_id)
+            if test_with_questions:
+                inferred_state, state_confidence = infer_session_state(test_with_questions)
+                logger.info(
+                    "Session state for test %s: inferred_session_state=%s inferred_state_confidence=%.2f",
+                    test_id, inferred_state, state_confidence
+                )
+                existing_meta = (test_with_questions.get("metadata") or {}).copy()
+                if not isinstance(existing_meta, dict):
+                    existing_meta = {}
+                existing_meta["inferred_session_state"] = inferred_state
+                existing_meta["inferred_state_confidence"] = round(state_confidence, 2)
+                await test_repo.update_test_metadata(test_id, existing_meta)
+        except Exception as e:
+            logger.warning("Failed to infer or store session state for test %s: %s", test_id, e)
+        
         return TestSubmitResponse(
             test_id=test_id,
             total_score=score_result['total_score'],
@@ -1170,17 +1191,20 @@ async def delete_test(
 
 @router.get("/child/{child_id}/evaluation-report")
 async def get_evaluation_report(
+    background_tasks: BackgroundTasks,
     child_id: str,
     days_back: int = Query(30, ge=7, le=365),
     generate_guides: bool = Query(True),
     language: Optional[str] = Query(None, description="Language for study guides and cards (e.g. English, Hindi, Spanish)"),
     current_user: dict = Depends(get_current_user),
-    db: Database = Depends(get_database)
+    db: Database = Depends(get_database),
 ):
     """Get detailed evaluation report for a child.
     
     GET /api/v1/tests/child/{child_id}/evaluation-report?days_back=30&generate_guides=true&language=Hindi
     
+    - When generate_guides=true, report returns immediately with study_guide_links as placeholders (generating: true);
+      study guides are generated in parallel in the background.
     - Child can view own report; parent can view their children's reports; admin can view any.
     """
     try:
@@ -1221,6 +1245,14 @@ async def get_evaluation_report(
             generate_study_guides=generate_guides,
             language=language,
         )
+        if generate_guides and report and not report.get("error") and report.get("areas_of_focus"):
+            background_tasks.add_task(
+                report_service.generate_study_guides_background,
+                child_id,
+                report["areas_of_focus"],
+                language,
+                days_back,
+            )
         
         return report
         
@@ -1370,57 +1402,50 @@ async def regenerate_study_guide(
                 break
         
         if not matching_area:
-            # If no matching area found, still regenerate with existing parameters
-            logger.warning(f"No matching focus area found for {concept_name}, regenerating with existing parameters")
-            child = await db.fetchrow(
-                "SELECT grade FROM children WHERE id = $1",
-                existing_guide['child_id']
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot regenerate: no matching focus area for this guide. Complete a test created with subject+topics and view the evaluation report to regenerate from focus areas."
             )
-            grade_level = child['grade'] if child else None
-            subject = (concept_name.split('_')[0].strip() or None) if (concept_name and '_' in concept_name) else (concept_name.strip() or None) or existing_guide.get('subject')
-            regenerated_guide = await study_guide_service.generate_study_guide(
-                child_id=str(existing_guide['child_id']),
-                concept_name=concept_name,
-                focus_area=existing_guide.get('focus_area', 'General'),
-                grade_level=grade_level,
-                subject=subject,
-                force_regenerate=True,
-                language=language,
+        
+        subject = matching_area.get('subject')
+        if not subject or not str(subject).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Focus area has no subject; cannot regenerate study guide. Tests must be created with subject+topics."
             )
-        else:
-            # Regenerate with latest data from evaluation report
-            child = await db.fetchrow(
-                "SELECT grade FROM children WHERE id = $1",
-                existing_guide['child_id']
+        has_topic = matching_area.get('topic') or (matching_area.get('topics_from_test') and len(matching_area.get('topics_from_test', [])) > 0)
+        if not has_topic:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Focus area has no topic from test; cannot regenerate study guide. Tests must be created with subject+topics so metadata.topics is set."
             )
-            grade_level = child['grade'] if child else None
-            
-            # Extract common errors with explanations
-            common_errors_list = []
-            if matching_area.get('common_errors'):
-                for e in matching_area['common_errors']:
-                    if isinstance(e, dict):
-                        error_type = e.get('type', str(e))
-                        explanations = e.get('explanations', [])
-                        if explanations:
-                            error_desc = f"{error_type}: {explanations[0]}"
-                            if len(explanations) > 1:
-                                error_desc += f" (Also seen: {', '.join(explanations[1:2])})"
-                            common_errors_list.append(error_desc)
-                        else:
-                            error_desc = f"{error_type}: This error occurred {e.get('count', 1)} time(s). Review the concept and practice similar problems."
-                            common_errors_list.append(error_desc)
+        
+        # Regenerate with latest data from evaluation report
+        child = await db.fetchrow(
+            "SELECT grade FROM children WHERE id = $1",
+            existing_guide['child_id']
+        )
+        grade_level = child['grade'] if child else None
+        
+        # Extract common errors with explanations
+        common_errors_list = []
+        if matching_area.get('common_errors'):
+            for e in matching_area['common_errors']:
+                if isinstance(e, dict):
+                    error_type = e.get('type', str(e))
+                    explanations = e.get('explanations', [])
+                    if explanations:
+                        error_desc = f"{error_type}: {explanations[0]}"
+                        if len(explanations) > 1:
+                            error_desc += f" (Also seen: {', '.join(explanations[1:2])})"
+                        common_errors_list.append(error_desc)
                     else:
-                        common_errors_list.append(str(e))
-            
-            # Derive subject from concept name (e.g. biology_General -> biology) so we don't reuse a wrong stored subject
-            subject = (concept_name.split('_')[0].strip() or None) if (concept_name and '_' in concept_name) else (concept_name.strip() or None)
-            if not subject:
-                subject = existing_guide.get('subject')
-            if not subject and report.get('subject_performance'):
-                subject = report['subject_performance'][0].get('subject') if report['subject_performance'] else None
-            
-            regenerated_guide = await study_guide_service.generate_study_guide(
+                        error_desc = f"{error_type}: This error occurred {e.get('count', 1)} time(s). Review the concept and practice similar problems."
+                        common_errors_list.append(error_desc)
+                else:
+                    common_errors_list.append(str(e))
+        
+        regenerated_guide = await study_guide_service.generate_study_guide(
                 child_id=str(existing_guide['child_id']),
                 concept_name=concept_name,
                 focus_area=f"Performance: {matching_area['score_percentage']}%",
@@ -1431,6 +1456,8 @@ async def regenerate_study_guide(
                 sample_questions=matching_area.get('sample_questions', []),
                 force_regenerate=True,  # This will delete old and create new, or update if replace_existing is used
                 language=language,
+                topic_from_test=matching_area.get('topic'),
+                topics_from_test=matching_area.get('topics_from_test'),
             )
         
         return {
@@ -1543,8 +1570,14 @@ async def chat_with_coach(
                 detail="Access denied: You can only chat about your own study guides"
             )
         
+        # Load child context for cultural/context flexibility
+        child_id_for_ctx = str(guide.get("child_id")) if guide.get("child_id") else None
+        from core.child_context import get_child_context
+        child_ctx = await get_child_context(child_id=child_id_for_ctx, language_override=language)
+        cultural_block = child_ctx.get("prompt_block") or ""
+        
         # Build system prompt for Socratic AI Coach
-        system_prompt = _build_coach_system_prompt(guide, context, language=language)
+        system_prompt = _build_coach_system_prompt(guide, context, language=language, cultural_block=cultural_block)
         
         # Prepare messages
         messages = []
@@ -1599,7 +1632,12 @@ async def chat_with_coach(
         )
 
 
-def _build_coach_system_prompt(guide: dict, context: dict, language: Optional[str] = None) -> str:
+def _build_coach_system_prompt(
+    guide: dict,
+    context: dict,
+    language: Optional[str] = None,
+    cultural_block: Optional[str] = None
+) -> str:
     """Build system prompt for Socratic AI Coach."""
     output_lang = (language or "English").strip() or "English"
     prompt = f"""# Role: Socratic AI Coach (Llama 3.1)
@@ -1608,6 +1646,11 @@ You are a brilliant, supportive tutor. Your goal is to guide students to mastery
 ## 0. OUTPUT LANGUAGE AND SCRIPT
 Respond in **{output_lang}** only. All your messages (explanations, questions, hints, navigation suggestions) must be in {output_lang}. Keep LaTeX and math notation unchanged. If the user writes in another language, you may acknowledge briefly but continue in {output_lang}.
 **CRITICAL - Use the native script, not Roman/Latin transliteration:** For Hindi, write in **Devanagari script** (e.g. आपको, समस्या, मदद), NOT in Roman script (e.g. "Aapko", "samasya", "madad"). For Spanish or English, use standard Latin script. Never respond in Hindi using Romanized/English letters—always use Devanagari (हिंदी) when the language is Hindi.
+{f'''
+
+## 0b. CULTURAL / CONTEXT PREFERENCES
+{cultural_block}
+''' if cultural_block else ''}
 
 ## 1. THE KNOWLEDGE HIERARCHY
 - **Scope Anchor**: Use the provided `[STUDY_GUIDE]` to identify which topics are "in-bounds." Do not teach advanced concepts (e.g., Relativity) if the guide only covers Classical Mechanics.

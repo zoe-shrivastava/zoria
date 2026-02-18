@@ -1,6 +1,6 @@
 """Schemas for evaluation and behavioral tracking."""
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 
@@ -28,6 +28,10 @@ class BehavioralPayload(BaseModel):
         ge=1,
         le=5,
         description="Self-reported confidence score 1-5 (measures self-awareness/calibration)"
+    )
+    navigation_actions: Optional[List[str]] = Field(
+        None,
+        description="Actions taken: next, previous, skip, flag (for session state inference)"
     )
 
 

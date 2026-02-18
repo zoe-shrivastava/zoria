@@ -300,13 +300,7 @@ export const documents = {
     const childIdsArray = Array.isArray(childIds) ? childIds : (childIds ? [childIds] : [])
 
     if (childIdsArray.length > 0) {
-      if (childIdsArray.length === 1) {
-        // Single child - use child_id for backward compatibility
-        formData.append('child_id', childIdsArray[0])
-      } else {
-        // Multiple children - use child_ids (comma-separated)
-        formData.append('child_ids', childIdsArray.join(','))
-      }
+      formData.append('child_ids', childIdsArray.join(','))
     }
 
     const token = localStorage.getItem('token') || sessionStorage.getItem('token')
@@ -467,6 +461,12 @@ export const tests = {
 export const child = {
   getProfile: () =>
     apiRequest('/api/v1/child/profile', { method: 'GET' }),
+  updateProfile: (body) =>
+    apiRequest('/api/v1/child/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 }
 
 /**

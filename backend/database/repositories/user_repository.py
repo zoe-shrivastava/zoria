@@ -227,7 +227,9 @@ class UserRepository:
         """
         return await self.db.fetchrow(
             """
-            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active
+            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active,
+                   preferred_language, interaction_tone, example_preferences, interests,
+                   sensitive_topics_to_avoid, prefer_indirect_guidance
             FROM children 
             WHERE id = $1 AND is_active = TRUE
             """,
@@ -245,7 +247,9 @@ class UserRepository:
         """
         return await self.db.fetchrow(
             """
-            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active
+            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active,
+                   preferred_language, interaction_tone, example_preferences, interests,
+                   sensitive_topics_to_avoid, prefer_indirect_guidance
             FROM children 
             WHERE child_code = $1 AND is_active = TRUE
             """,
@@ -263,7 +267,10 @@ class UserRepository:
         """
         return await self.db.fetch(
             """
-            SELECT * FROM children
+            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active,
+                   preferred_language, interaction_tone, example_preferences, interests,
+                   sensitive_topics_to_avoid, prefer_indirect_guidance
+            FROM children
             WHERE parent_id = $1 AND is_active = TRUE
             ORDER BY created_at DESC
             """,
@@ -282,7 +289,10 @@ class UserRepository:
         """
         return await self.db.fetch(
             """
-            SELECT * FROM children
+            SELECT id, parent_id, name, pin_hash, child_code, grade, age, avatar_url, created_at, is_active,
+                   preferred_language, interaction_tone, example_preferences, interests,
+                   sensitive_topics_to_avoid, prefer_indirect_guidance
+            FROM children
             WHERE is_active = TRUE
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
@@ -297,7 +307,13 @@ class UserRepository:
         pin_hash: Optional[str] = None,
         grade: Optional[str] = None,
         age: Optional[int] = None,
-        avatar_url: Optional[str] = None
+        avatar_url: Optional[str] = None,
+        preferred_language: Optional[str] = None,
+        interaction_tone: Optional[str] = None,
+        example_preferences: Optional[str] = None,
+        interests: Optional[str] = None,
+        sensitive_topics_to_avoid: Optional[str] = None,
+        prefer_indirect_guidance: Optional[bool] = None
     ) -> None:
         """Update child profile.
         
@@ -308,6 +324,12 @@ class UserRepository:
             grade: Child grade
             age: Child age
             avatar_url: Avatar URL
+            preferred_language: Preferred language for content
+            interaction_tone: playful, encouraging, direct, gentle
+            example_preferences: storytelling, step-by-step, factual
+            interests: Comma-separated interests
+            sensitive_topics_to_avoid: Topics to avoid
+            prefer_indirect_guidance: Use indirect phrasing for emotional topics
         """
         updates = []
         params = []
@@ -333,6 +355,30 @@ class UserRepository:
         if avatar_url is not None:
             updates.append(f"avatar_url = ${param_idx}")
             params.append(avatar_url)
+            param_idx += 1
+        if preferred_language is not None:
+            updates.append(f"preferred_language = ${param_idx}")
+            params.append(preferred_language)
+            param_idx += 1
+        if interaction_tone is not None:
+            updates.append(f"interaction_tone = ${param_idx}")
+            params.append(interaction_tone)
+            param_idx += 1
+        if example_preferences is not None:
+            updates.append(f"example_preferences = ${param_idx}")
+            params.append(example_preferences)
+            param_idx += 1
+        if interests is not None:
+            updates.append(f"interests = ${param_idx}")
+            params.append(interests)
+            param_idx += 1
+        if sensitive_topics_to_avoid is not None:
+            updates.append(f"sensitive_topics_to_avoid = ${param_idx}")
+            params.append(sensitive_topics_to_avoid)
+            param_idx += 1
+        if prefer_indirect_guidance is not None:
+            updates.append(f"prefer_indirect_guidance = ${param_idx}")
+            params.append(prefer_indirect_guidance)
             param_idx += 1
         
         if updates:

@@ -1,5 +1,6 @@
 """Service for generating detailed evaluation reports."""
 
+import asyncio
 import json
 import logging
 from typing import Dict, Any, List, Optional
@@ -67,7 +68,7 @@ class EvaluationReportService:
         
         tests = await self.db.fetch(
             """
-            SELECT id, title, completed_at, total_score, max_score, concept_id
+            SELECT id, title, completed_at, total_score, max_score, concept_id, metadata
             FROM tests
             WHERE child_id = $1 
                 AND status = 'completed'
@@ -164,6 +165,24 @@ class EvaluationReportService:
                         concept_name = question['metadata'].get('concept_name')
                         if concept_name:
                             concept_tags = [concept_name]
+                
+                # Fallback: topic-based tests store concept name in blueprint.metadata
+                if not concept_tags and question.get('metadata'):
+                    blueprint = question['metadata'].get('blueprint', {})
+                    if isinstance(blueprint, dict):
+                        concept_name = (blueprint.get('metadata') or {}).get('concept_name')
+                        if concept_name:
+                            concept_tags = [concept_name]
+                    elif isinstance(blueprint, str):
+                        try:
+                            import json
+                            blueprint_dict = json.loads(blueprint)
+                            if isinstance(blueprint_dict, dict):
+                                concept_name = (blueprint_dict.get('metadata') or {}).get('concept_name')
+                                if concept_name:
+                                    concept_tags = [concept_name]
+                        except Exception:
+                            pass
                 
                 # If still no concepts, use subject as a fallback concept
                 if not concept_tags and subject:
@@ -307,7 +326,9 @@ class EvaluationReportService:
                         'misconception': question.get('misconception') if has_answer else None,
                         'detailed_feedback': question.get('detailed_feedback'),
                         'answer': question.get('answer'),
-                        'expected_answer': expected
+                        'expected_answer': expected,
+                        '_test_metadata': test.get('metadata'),
+                        '_subject': subject,  # per-question subject for topic-based focus area display
                     })
                 
                 # Track question type performance
@@ -389,11 +410,50 @@ class EvaluationReportService:
                             enriched_errors.append(error_detail)
                     
                     unique_misconceptions = list(set(perf['misconceptions']))[:5]
-                    # Derive subject from concept name once (e.g. biology_General -> biology) so study guide always gets correct subject
-                    area_subject = (concept.split('_')[0].strip() or None) if (concept and '_' in concept) else (concept.strip() or None)
+                    # Derive subject from concept name (e.g. biology_General -> biology); for topic-based concepts use test metadata
+                    area_subject = (concept.split('_')[0].strip() or None) if (concept and '_' in concept) else None
+                    if not area_subject and concept:
+                        area_subject = concept.strip()  # fallback to concept name
+                    # Collect topics from test metadata and subject when topic-based (concept has no underscore)
+                    topics_from_test = set()
+                    need_subject_from_questions = area_subject == (concept or '').strip()
+                    for q in perf['questions']:
+                        meta = q.get('_test_metadata') or {}
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta) if meta else {}
+                            except Exception:
+                                meta = {}
+                        # For topic-based concepts, get real subject from test metadata or per-question (e.g. Physics, not concept name)
+                        if need_subject_from_questions:
+                            from_meta = (meta.get('subject') or '').strip()
+                            from_question = (q.get('_subject') or '').strip() if isinstance(q.get('_subject'), str) else None
+                            def _use_as_subject(val):
+                                if not val: return False
+                                return val.lower() != (concept or '').strip().lower()
+                            if _use_as_subject(from_meta):
+                                area_subject = from_meta
+                                need_subject_from_questions = False
+                            elif _use_as_subject(from_question):
+                                area_subject = from_question
+                                need_subject_from_questions = False
+                        for t in (meta.get('topics') or []):
+                            if t and str(t).strip():
+                                topics_from_test.add(str(t).strip())
+                    primary_topic = (list(topics_from_test)[0]) if topics_from_test else None
+                    if not primary_topic and concept and '_' in concept:
+                        # e.g. physics_General -> use part after underscore only if not "General"
+                        after = concept.split('_', 1)[1].strip() if '_' in concept else ''
+                        primary_topic = after if after and after.lower() != 'general' else None
+                    if not primary_topic and concept and '_' not in concept:
+                        # Topic-based tests: concept from blueprint (e.g. "Speed & Velocity") serves as topic
+                        primary_topic = concept.strip()
+                        topics_from_test.add(primary_topic)
                     areas_of_focus.append({
                         'concept': concept,
                         'subject': area_subject,
+                        'topic': primary_topic,
+                        'topics_from_test': list(topics_from_test),
                         'accuracy': round(accuracy, 1),
                         'score_percentage': round(score_percentage, 1),
                         'questions_count': perf['total_questions'],
@@ -455,188 +515,65 @@ class EvaluationReportService:
             logger.info(f"   Focus areas: {focus_list}")
         logger.info(f"   generate_study_guides={generate_study_guides}, areas_of_focus count={len(areas_of_focus)}")
         
-        # Generate study guides for focus areas
+        # Require topic from test for every focus area when generating study guides (no fallbacks)
+        if generate_study_guides and areas_of_focus:
+            for area in areas_of_focus[:5]:
+                has_topic = area.get('topic') or (area.get('topics_from_test') and len(area.get('topics_from_test', [])) > 0)
+                if not has_topic:
+                    raise ValueError(
+                        f"Focus area concept '{area.get('concept')}' has no topic from test. "
+                        "Tests must be created with subject+topics so metadata.topics is set."
+                    )
+        
+        # Study guides: either return placeholders (generating in background) or fill from DB
         study_guide_links = []
         if generate_study_guides and areas_of_focus:
-            logger.info(f"✅ Starting study guide generation for {len(areas_of_focus)} focus areas")
-            try:
-                from services.study_guide_service import StudyGuideService
-                study_guide_service = StudyGuideService(self.db)
-                
-                # Get child info for grade level
-                child = await self.db.fetchrow(
-                    "SELECT grade FROM children WHERE id = $1",
-                    child_id
-                )
-                grade_level = child['grade'] if child else None
-                logger.info(f"Child grade level: {grade_level}")
-                
-                # Subject will be derived per area from the area's concept (e.g. biology_General -> biology)
-                for idx, area in enumerate(areas_of_focus[:5], 1):  # Generate guides for top 5 focus areas
-                    try:
-                        concept_name = area.get('concept', '') or ''
-                        # Use subject stored on area (derived from concept when building areas); fallback to deriving from concept_name
-                        subject = area.get('subject')
-                        if not subject:
-                            subject = (concept_name.split('_')[0].strip() or None) if concept_name and '_' in concept_name else (concept_name.strip() or None)
-                        if not subject and tests:
-                            test_with_questions = await self.test_repo.get_test_with_questions(tests[0]['id'])
-                            if test_with_questions and test_with_questions.get('questions'):
-                                first_q = test_with_questions['questions'][0]
-                                if first_q.get('metadata'):
-                                    subject = first_q['metadata'].get('subject')
-                        logger.info(f"📚 [{idx}/{min(5, len(areas_of_focus))}] Generating study guide for: '{area['concept']}' (subject={subject})")
-                        logger.info(f"   Performance: {area.get('score_percentage', 'N/A')}%, Questions: {area.get('questions_count', 0)}")
-                        logger.info(f"   Common errors: {len(area.get('common_errors', []))}, Misconceptions: {len(area.get('misconceptions', []))}")
-                        
-                        # Debug: Log error_details availability
-                        error_details = area.get('error_details', {})
-                        logger.info(f"   Error details available for {len(error_details)} error types: {list(error_details.keys())}")
-                        for err_type, details in error_details.items():
-                            logger.info(f"     - {err_type}: {len(details)} explanations")
-                            if details:
-                                logger.info(f"       First explanation: {details[0].get('explanation', 'N/A')[:100]}...")
-                        
-                        # Extract common errors with detailed explanations
-                        common_errors_list = []
-                        if area.get('common_errors'):
-                            for e in area['common_errors']:
-                                if isinstance(e, dict):
-                                    error_type = e.get('type', str(e))
-                                    explanations = e.get('explanations', [])
-                                    count = e.get('count', 1)
-                                    # Create enriched error description
-                                    if explanations and len(explanations) > 0:
-                                        # Combine error type with all unique explanations
-                                        # Use the first (most common) explanation as primary
-                                        error_desc = f"{error_type}: {explanations[0]}"
-                                        # If there are additional unique explanations, include them
-                                        if len(explanations) > 1:
-                                            additional = explanations[1:3]  # Include up to 2 more examples
-                                            if len(additional) == 1:
-                                                error_desc += f" | Also seen: {additional[0]}"
-                                            else:
-                                                error_desc += f" | Other examples: {' | '.join(additional)}"
-                                        common_errors_list.append(error_desc)
-                                    else:
-                                        # No detailed explanations available - try to get from error_details directly
-                                        # This handles cases where explanations weren't properly extracted
-                                        error_details = area.get('error_details', {})
-                                        logger.debug(f"   No explanations in enriched_errors for '{error_type}', checking error_details directly...")
-                                        logger.debug(f"   Available error_details keys: {list(error_details.keys())}")
-                                        if error_type in error_details and error_details[error_type]:
-                                            # Get explanations directly from error_details
-                                            direct_explanations = []
-                                            logger.debug(f"   Found {len(error_details[error_type])} entries in error_details['{error_type}']")
-                                            for detail in error_details[error_type][:5]:  # Get up to 5
-                                                if isinstance(detail, dict):
-                                                    exp = detail.get('explanation', '')
-                                                    logger.debug(f"     Explanation from dict: {exp[:100] if exp else 'EMPTY'}...")
-                                                else:
-                                                    exp = str(detail) if detail else ''
-                                                    logger.debug(f"     Explanation from string: {exp[:100] if exp else 'EMPTY'}...")
-                                                if exp and exp.strip():
-                                                    direct_explanations.append(exp)
-                                            if direct_explanations:
-                                                logger.info(f"   ✅ Found {len(direct_explanations)} explanations in error_details for '{error_type}'")
-                                                error_desc = f"{error_type}: {direct_explanations[0]}"
-                                                if len(direct_explanations) > 1:
-                                                    additional = direct_explanations[1:3]  # Include up to 2 more
-                                                    if len(additional) == 1:
-                                                        error_desc += f" | Also seen: {additional[0]}"
-                                                    else:
-                                                        error_desc += f" | Other examples: {' | '.join(additional)}"
-                                                common_errors_list.append(error_desc)
-                                                continue
-                                            else:
-                                                logger.warning(f"   ⚠️ error_details['{error_type}'] exists but has no valid explanations")
-                                        else:
-                                            logger.warning(f"   ⚠️ No error_details found for error_type '{error_type}' (available: {list(error_details.keys())})")
-                                        
-                                        # Fallback: provide helpful message based on error type
-                                        # Skip "None" as an error type - it's not meaningful
-                                        if error_type and error_type.lower() in ['none', 'null', '']:
-                                            continue  # Skip invalid error types
-                                        
-                                        if error_type == 'No_Answer':
-                                            error_desc = f"{error_type}: Questions were not answered. Make sure to attempt all questions, even if unsure. Partial credit may be given for showing work."
-                                        elif error_type == 'Arithmetic':
-                                            error_desc = f"{error_type}: Calculation errors occurred {count} time(s). Double-check your arithmetic, especially when working with decimals or fractions."
-                                        elif error_type == 'Conceptual':
-                                            error_desc = f"{error_type}: Conceptual misunderstanding occurred {count} time(s). Review the fundamental concepts and definitions."
-                                        elif error_type == 'Procedural':
-                                            error_desc = f"{error_type}: Procedural errors occurred {count} time(s). Review the step-by-step problem-solving method."
-                                        elif error_type == 'Unit_Mismatch':
-                                            error_desc = f"{error_type}: Unit errors occurred {count} time(s). Pay attention to units in calculations and final answers."
-                                        elif error_type == 'Partial_Credit':
-                                            error_desc = f"{error_type}: Answers were partially correct {count} time(s). Review the solution steps and ensure all parts of answers are complete and accurate."
-                                        elif error_type == 'Incorrect':
-                                            error_desc = f"{error_type}: Answers were incorrect {count} time(s). Review the concept and practice similar problems."
-                                        else:
-                                            error_desc = f"{error_type}: This error occurred {count} time(s). Review the concept and practice similar problems."
-                                        common_errors_list.append(error_desc)
-                                else:
-                                    # If it's already a string, check if it needs enrichment
-                                    error_str = str(e)
-                                    if ':' not in error_str and error_str not in ['None', '']:
-                                        # It's just an error type, add helpful message
-                                        if error_str == 'No_Answer':
-                                            common_errors_list.append(f"{error_str}: Questions were not answered. Make sure to attempt all questions, even if unsure.")
-                                        else:
-                                            common_errors_list.append(f"{error_str}: Review this error type and practice similar problems.")
-                                    else:
-                                        common_errors_list.append(error_str)
-                        
-                        # Filter out None, empty strings, and invalid error names
-                        common_errors_list = [e for e in common_errors_list if e and e.strip() and e.lower() not in ['none', 'null', '']]
-                        
-                        if not common_errors_list:
-                            logger.warning(f"No valid common errors extracted for {area['concept']}, area['common_errors']={area.get('common_errors')}")
-                        
-                        logger.info(f"   Calling study_guide_service.generate_study_guide()...")
-                        logger.info(f"   Passing {len(common_errors_list)} common errors: {common_errors_list[:2]}...")
-                        # Debug: Log what we're actually passing
-                        for i, err in enumerate(common_errors_list[:3], 1):
-                            logger.info(f"     Error {i}: {err[:150]}...")
-                        guide = await study_guide_service.generate_study_guide(
-                            child_id=child_id,
-                            concept_name=area['concept'],
-                            focus_area=f"Performance: {area['score_percentage']}%",
-                            grade_level=grade_level,
-                            subject=subject,
-                            common_errors=common_errors_list if common_errors_list else None,
-                            misconceptions=area.get('misconceptions', []),
-                            sample_questions=area.get('sample_questions', []),
-                            language=language,
-                        )
-                        
-                        logger.info(f"✅ Successfully generated study guide for '{area['concept']}'")
-                        logger.info(f"   Guide ID: {guide.get('id')}, is_new: {guide.get('is_new', 'unknown')}")
-                        
-                        study_guide_links.append({
-                            'concept': area['concept'],
-                            'guide_id': guide['id'],
-                            'focus_area': area['score_percentage']
-                        })
-                    except Exception as e:
-                        logger.error(f"❌ Failed to generate study guide for '{area['concept']}': {e}", exc_info=True)
-                        import traceback
-                        logger.error(f"   Full traceback: {traceback.format_exc()}")
-            except Exception as e:
-                logger.error(f"Error initializing study guide service: {e}", exc_info=True)
+            # Return report immediately with placeholders; API will run generation in background in parallel
+            study_guide_links = [
+                {
+                    'concept': area['concept'],
+                    'subject': area.get('subject'),
+                    'guide_id': None,
+                    'generating': True,
+                    'focus_area': area['score_percentage']
+                }
+                for area in areas_of_focus[:5]
+            ]
+            logger.info(f"Returning report with {len(study_guide_links)} study guide placeholders (generating in background)")
+        elif not generate_study_guides and areas_of_focus:
+            study_guide_links = await self._get_existing_study_guide_links(child_id, areas_of_focus)
+            logger.info(f"Filled {len(study_guide_links)} study guide links from DB")
         else:
             if not generate_study_guides:
                 logger.info("Study guide generation is disabled")
             if not areas_of_focus:
                 logger.info("No areas of focus found, skipping study guide generation")
         
-        logger.info(f"Generated {len(study_guide_links)} study guides")
+        # Build recent session states (inferred_session_state from test metadata)
+        session_states = []
+        for test in tests:
+            meta = test.get('metadata')
+            if isinstance(meta, str):
+                try:
+                    import json as _json
+                    meta = _json.loads(meta)
+                except Exception:
+                    meta = {}
+            state = (meta or {}).get('inferred_session_state')
+            if state:
+                session_states.append({
+                    'test_id': str(test['id']),
+                    'title': test.get('title'),
+                    'completed_at': test.get('completed_at'),
+                    'inferred_session_state': state
+                })
         
         return {
             'child_id': child_id,
             'generated_at': datetime.utcnow().isoformat(),
             'period_days': days_back,
             'tests_analyzed': len(tests),
+            'session_states': session_states,
             'overall_performance': {
                 'total_questions': total_questions,
                 'correct_count': correct_count,
@@ -660,6 +597,164 @@ class EvaluationReportService:
             'study_guide_links': study_guide_links,
             'recommendations': self._generate_recommendations(strengths, areas_of_focus, error_patterns)
         }
+
+    async def _get_existing_study_guide_links(
+        self, child_id: str, areas_of_focus: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """Fill study_guide_links from DB for focus areas (when not generating)."""
+        links = []
+        for area in areas_of_focus[:5]:
+            concept = area.get('concept', '') or ''
+            focus_pct = area.get('score_percentage')
+            focus_area = f"Performance: {focus_pct}%" if focus_pct is not None else "General"
+            row = await self.db.fetchrow(
+                """
+                SELECT id FROM study_guides
+                WHERE child_id = $1 AND concept_name = $2
+                ORDER BY generated_at DESC
+                LIMIT 1
+                """,
+                child_id, concept
+            )
+            if row:
+                links.append({
+                    'concept': concept,
+                    'subject': area.get('subject'),
+                    'guide_id': str(row['id']),
+                    'focus_area': focus_pct
+                })
+        return links
+
+    async def _generate_one_study_guide(
+        self,
+        study_guide_service: Any,
+        child_id: str,
+        area: Dict[str, Any],
+        grade_level: Optional[str],
+        language: Optional[str],
+        tests: List[Dict],
+    ) -> None:
+        """Generate a single study guide (for parallel execution). On failure logs and returns."""
+        concept_name = area.get('concept', '') or ''
+        subject = area.get('subject')
+        if not subject:
+            subject = (concept_name.split('_')[0].strip() or None) if concept_name and '_' in concept_name else (concept_name.strip() or None)
+        if not subject and tests:
+            test_with_questions = await self.test_repo.get_test_with_questions(tests[0]['id'])
+            if test_with_questions and test_with_questions.get('questions'):
+                first_q = test_with_questions['questions'][0]
+                if first_q.get('metadata'):
+                    subject = first_q['metadata'].get('subject')
+        error_details = area.get('error_details', {}) or {}
+        common_errors_list = []
+        if area.get('common_errors'):
+            for e in area['common_errors']:
+                if isinstance(e, dict):
+                    error_type = e.get('type', str(e))
+                    explanations = e.get('explanations', [])
+                    count = e.get('count', 1)
+                    if explanations:
+                        error_desc = f"{error_type}: {explanations[0]}"
+                        if len(explanations) > 1:
+                            additional = explanations[1:3]
+                            error_desc += f" | Other examples: {' | '.join(additional)}" if len(additional) > 1 else f" | Also seen: {additional[0]}"
+                        common_errors_list.append(error_desc)
+                    elif error_type in error_details and error_details[error_type]:
+                        direct_explanations = []
+                        for detail in error_details[error_type][:5]:
+                            exp = detail.get('explanation', '') if isinstance(detail, dict) else (str(detail) or '')
+                            if exp and exp.strip():
+                                direct_explanations.append(exp)
+                        if direct_explanations:
+                            error_desc = f"{error_type}: {direct_explanations[0]}"
+                            if len(direct_explanations) > 1:
+                                error_desc += f" | Also seen: {direct_explanations[1]}"
+                            common_errors_list.append(error_desc)
+                            continue
+                    if error_type and error_type.lower() in ['none', 'null', '']:
+                        continue
+                    if error_type == 'No_Answer':
+                        error_desc = f"{error_type}: Questions were not answered. Make sure to attempt all questions, even if unsure."
+                    elif error_type == 'Arithmetic':
+                        error_desc = f"{error_type}: Calculation errors occurred {count} time(s). Double-check your arithmetic."
+                    elif error_type == 'Conceptual':
+                        error_desc = f"{error_type}: Conceptual misunderstanding occurred {count} time(s). Review the fundamental concepts."
+                    elif error_type == 'Procedural':
+                        error_desc = f"{error_type}: Procedural errors occurred {count} time(s). Review the step-by-step method."
+                    elif error_type == 'Unit_Mismatch':
+                        error_desc = f"{error_type}: Unit errors occurred {count} time(s). Pay attention to units."
+                    elif error_type == 'Partial_Credit':
+                        error_desc = f"{error_type}: Answers were partially correct {count} time(s). Review solution steps."
+                    elif error_type == 'Incorrect':
+                        error_desc = f"{error_type}: Answers were incorrect {count} time(s). Review the concept and practice."
+                    else:
+                        error_desc = f"{error_type}: This error occurred {count} time(s). Review and practice."
+                    common_errors_list.append(error_desc)
+                else:
+                    error_str = str(e)
+                    if error_str and error_str not in ['None', ''] and ':' not in error_str:
+                        msg = (f"{error_str}: Questions were not answered. Make sure to attempt all questions."
+                               if error_str == 'No_Answer' else f"{error_str}: Review this error type and practice similar problems.")
+                        common_errors_list.append(msg)
+                    elif error_str and ':' in error_str:
+                        common_errors_list.append(error_str)
+        common_errors_list = [x for x in common_errors_list if x and x.strip() and x.lower() not in ['none', 'null', '']]
+        try:
+            await study_guide_service.generate_study_guide(
+                child_id=child_id,
+                concept_name=area['concept'],
+                focus_area=f"Performance: {area['score_percentage']}%",
+                grade_level=grade_level,
+                subject=subject,
+                common_errors=common_errors_list or None,
+                misconceptions=area.get('misconceptions', []),
+                sample_questions=area.get('sample_questions', []),
+                language=language,
+                topic_from_test=area.get('topic'),
+                topics_from_test=area.get('topics_from_test'),
+            )
+            logger.info(f"✅ Background: generated study guide for '{area['concept']}'")
+        except Exception as e:
+            logger.error(f"❌ Background: failed study guide for '{area['concept']}': {e}", exc_info=True)
+
+    async def generate_study_guides_background(
+        self,
+        child_id: str,
+        areas_of_focus: List[Dict[str, Any]],
+        language: Optional[str],
+        days_back: int = 30,
+    ) -> None:
+        """Generate study guides for focus areas in parallel (called from API background task)."""
+        if not areas_of_focus:
+            return
+        try:
+            from services.study_guide_service import StudyGuideService
+            study_guide_service = StudyGuideService(self.db)
+            child = await self.db.fetchrow("SELECT grade FROM children WHERE id = $1", child_id)
+            grade_level = child['grade'] if child else None
+            cutoff = datetime.utcnow() - timedelta(days=days_back)
+            tests = await self.db.fetch(
+                """
+                SELECT id, title, completed_at, total_score, max_score, concept_id, metadata
+                FROM tests
+                WHERE child_id = $1 AND status = 'completed' AND completed_at >= $2
+                ORDER BY completed_at DESC
+                """,
+                child_id, cutoff
+            )
+            tasks = [
+                self._generate_one_study_guide(
+                    study_guide_service, child_id, area, grade_level, language, list(tests)
+                )
+                for area in areas_of_focus[:5]
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    logger.error(f"Background study guide task {i} failed: {r}", exc_info=True)
+            logger.info(f"Background study guide generation completed for {len(areas_of_focus[:5])} areas")
+        except Exception as e:
+            logger.error(f"Error in generate_study_guides_background: {e}", exc_info=True)
     
     def _generate_recommendations(
         self,

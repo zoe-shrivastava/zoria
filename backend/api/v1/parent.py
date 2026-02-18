@@ -99,7 +99,13 @@ async def update_child(
             pin=request.pin,
             grade=request.grade,
             age=request.age,
-            avatar_url=request.avatar_url
+            avatar_url=request.avatar_url,
+            preferred_language=request.preferred_language,
+            interaction_tone=request.interaction_tone,
+            example_preferences=request.example_preferences,
+            interests=request.interests,
+            sensitive_topics_to_avoid=request.sensitive_topics_to_avoid,
+            prefer_indirect_guidance=request.prefer_indirect_guidance
         )
         return ChildResponse(**result)
     except ValueError as e:

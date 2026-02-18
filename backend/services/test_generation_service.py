@@ -495,7 +495,8 @@ class TestGenerationService:
                 )
                 order_index += 1
         
-        # Activate test
+        # Activate test so the UI shows it as ready (not "Processing"). started_at stays null until
+        # the user clicks "Start Test"; the start endpoint sets started_at when starting.
         await self.test_repo.update_test_status(test_id, 'active')
     
     async def _get_prerequisite_concepts(self, concept_id: str) -> List[str]:

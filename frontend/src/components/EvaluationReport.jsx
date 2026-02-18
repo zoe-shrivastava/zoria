@@ -23,6 +23,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   const [containerHeight, setContainerHeight] = useState(null)
   const [expandedSubjects, setExpandedSubjects] = useState({}) // Track which subjects are expanded
   const [showMetadata, setShowMetadata] = useState(false) // Toggle for metadata info
+  const [regeneratingGuideId, setRegeneratingGuideId] = useState(null) // Guide ID being regenerated (show on tile)
   const recommendationsCarouselRef = useRef(null)
   
   // Use workspace context - always call hook, but handle gracefully if not in workspace
@@ -53,7 +54,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   const handleRegenerateGuide = async (guideId, e) => {
     e.preventDefault()
     e.stopPropagation()
-    
+    setRegeneratingGuideId(guideId)
     try {
       showNotification('Regenerating study guide...', 'info')
       const result = await tests.regenerateStudyGuide(guideId, preferredLanguage)
@@ -67,6 +68,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
     } catch (err) {
       console.error('Failed to regenerate study guide:', err)
       showNotification(err.message || 'Failed to regenerate study guide', 'error')
+    } finally {
+      setRegeneratingGuideId(null)
     }
   }
 
@@ -81,6 +84,42 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   useEffect(() => {
     console.log('Drawer state changed:', { drawerOpen, drawerContext })
   }, [drawerOpen, drawerContext])
+
+  // Poll for study guide completion when report has placeholders (generating: true, no guide_id yet)
+  const hasGeneratingGuides = report?.study_guide_links?.some(l => l.generating && !l.guide_id)
+  useEffect(() => {
+    if (!childId || !hasGeneratingGuides) return
+    let pollCount = 0
+    const maxPolls = 25
+    const intervalMs = 3000
+    const timer = setInterval(async () => {
+      pollCount += 1
+      if (pollCount > maxPolls) {
+        clearInterval(timer)
+        return
+      }
+      try {
+        const data = await tests.getEvaluationReport(childId, daysBack, false, preferredLanguage)
+        if (!data?.study_guide_links?.length) return
+        const byConcept = {}
+        data.study_guide_links.forEach(l => { byConcept[l.concept] = l })
+        setReport(prev => {
+          if (!prev?.study_guide_links?.length) return prev
+          const updated = prev.study_guide_links.map(l => {
+            const fromServer = byConcept[l.concept]
+            if (fromServer?.guide_id) return { ...l, guide_id: fromServer.guide_id, generating: false }
+            return l
+          })
+          const stillGenerating = updated.some(l => l.generating && !l.guide_id)
+          if (!stillGenerating) clearInterval(timer)
+          return { ...prev, study_guide_links: updated }
+        })
+      } catch (_) {
+        // ignore poll errors
+      }
+    }, intervalMs)
+    return () => clearInterval(timer)
+  }, [childId, daysBack, preferredLanguage, hasGeneratingGuides])
 
   // Debug: Log guideMap when report is available
   // MUST be before any early returns to follow Rules of Hooks
@@ -194,7 +233,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
     )
   }
 
-  const { overall_performance, subject_performance, strengths, areas_of_focus, recommendations, error_patterns, study_guide_links } = report
+  const { overall_performance, subject_performance, strengths, areas_of_focus, recommendations, error_patterns, study_guide_links, session_states } = report
 
   // Helper function to format subject/concept names consistently
   // Handles formats like "biology_General" -> "Biology" or "physics" -> "Physics"
@@ -413,10 +452,54 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               })()}</div>
               <div style={{ marginTop: '0.5rem' }}><strong>Period:</strong> Last {report.period_days} days</div>
               <div style={{ marginTop: '0.5rem' }}><strong>Tests Analyzed:</strong> {report.tests_analyzed}</div>
+              {session_states && session_states.length > 0 && (
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color)' }}>
+                  <strong>Session states</strong>
+                  <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem', fontSize: '0.8rem' }}>
+                    {session_states.slice(0, 5).map((s, i) => (
+                      <li key={s.test_id || i}>{s.inferred_session_state}{s.title ? ` — ${s.title}` : ''}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
+
+      {/* Recent session states - inferred from behavior */}
+      {session_states && session_states.length > 0 && (
+        <div style={{
+          background: 'var(--bg-secondary)',
+          padding: '1rem 1.25rem',
+          borderRadius: 'var(--radius-md)',
+          marginBottom: '1.5rem',
+          border: '1px solid var(--border-color)'
+        }}>
+          <div style={{ fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.5rem' }}>Recent session states</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-color)' }}>
+            Inferred from how your child interacted with tests (e.g. time, hints, confidence).
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
+            {session_states.slice(0, 8).map((s, i) => (
+              <span
+                key={s.test_id || i}
+                style={{
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '0.8rem',
+                  textTransform: 'capitalize'
+                }}
+                title={s.title || s.completed_at}
+              >
+                {s.inferred_session_state}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Subject-Level Performance - Collapsible Cards */}
       {subject_performance && subject_performance.length > 0 && (
@@ -926,6 +1009,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
             maxWidth: '100%'
           }}>
             {study_guide_links.map((link) => {
+              const isGenerating = link.generating && !link.guide_id
               const guide = allGuides?.find(g => g.id === link.guide_id) || {
                 id: link.guide_id,
                 concept_name: link.concept,
@@ -935,10 +1019,59 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               
               const subjectName = formatSubjectName(link.concept)
               
+              if (isGenerating) {
+                return (
+                  <div
+                    key={`generating-${link.concept}`}
+                    style={{
+                      background: 'var(--bg-secondary)',
+                      padding: '0.5rem 0.6rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px dashed var(--border-color)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      minHeight: 0,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      justifyContent: 'space-between',
+                      gap: '0.15rem',
+                      opacity: 0.85
+                    }}
+                  >
+                    {link.subject && String(link.subject).trim().toLowerCase() !== String(link.concept || '').trim().toLowerCase() && (
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>
+                        Subject – {link.subject}
+                      </div>
+                    )}
+                    <div style={{ fontWeight: '600', fontSize: '0.8rem', color: 'var(--text-color)', paddingRight: '0.5rem' }}>
+                      {subjectName}
+                    </div>
+                    <div style={{
+                      marginTop: 'auto',
+                      padding: '0.25rem 0.35rem',
+                      background: 'var(--bg-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                      textAlign: 'center',
+                      fontSize: '0.65rem',
+                      color: 'var(--text-muted)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.35rem'
+                    }}>
+                      <LoadingSpinner />
+                      Generating…
+                    </div>
+                  </div>
+                )
+              }
+              
+              const isRegenerating = regeneratingGuideId === link.guide_id
               return (
                 <div
                   key={link.guide_id}
                   onClick={(e) => {
+                    if (isRegenerating) return
                     e.preventDefault()
                     e.stopPropagation()
                     
@@ -955,7 +1088,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     padding: '0.5rem 0.6rem',
                     borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--border-color)',
-                    cursor: 'pointer',
+                    cursor: isRegenerating ? 'wait' : 'pointer',
+                    opacity: isRegenerating ? 0.85 : 1,
                     transition: 'all 0.2s',
                     display: 'flex',
                     flexDirection: 'column',
@@ -982,8 +1116,10 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
+                      if (isRegenerating) return
                       handleRegenerateGuide(link.guide_id, e)
                     }}
+                    disabled={isRegenerating}
                     style={{
                       position: 'absolute',
                       top: '0.25rem',
@@ -996,13 +1132,15 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      cursor: 'pointer',
+                      cursor: isRegenerating ? 'wait' : 'pointer',
                       fontSize: '0.75rem',
                       padding: 0,
                       zIndex: 10,
-                      transition: 'all 0.2s'
+                      transition: 'all 0.2s',
+                      opacity: isRegenerating ? 0.7 : 1
                     }}
                     onMouseEnter={(e) => {
+                      if (isRegenerating) return
                       e.currentTarget.style.background = 'var(--primary-color-light)'
                       e.currentTarget.style.borderColor = 'var(--primary-color)'
                     }}
@@ -1010,12 +1148,25 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                       e.currentTarget.style.background = 'var(--bg-primary)'
                       e.currentTarget.style.borderColor = 'var(--border-color)'
                     }}
-                    title="Regenerate study guide"
+                    title={isRegenerating ? 'Regenerating…' : 'Regenerate study guide'}
                   >
-                    🔄
+                    {isRegenerating ? '⋯' : '🔄'}
                   </button>
 
                   <div style={{ minWidth: 0, minHeight: 0, flex: '1 1 auto', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                    {link.subject && String(link.subject).trim().toLowerCase() !== String(link.concept || '').trim().toLowerCase() && (
+                      <div style={{
+                        fontSize: '0.65rem',
+                        color: 'var(--text-muted)',
+                        textTransform: 'capitalize',
+                        marginBottom: 0,
+                        overflow: 'hidden',
+                        wordBreak: 'break-word',
+                        minWidth: 0
+                      }}>
+                        Subject – {link.subject}
+                      </div>
+                    )}
                     <div style={{ 
                       fontWeight: '600', 
                       fontSize: '0.8rem',
@@ -1069,16 +1220,16 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                   <div style={{
                     marginTop: 'auto',
                     padding: '0.25rem 0.35rem',
-                    background: 'var(--primary-color-light)',
+                    background: isRegenerating ? 'var(--border-color)' : 'var(--primary-color-light)',
                     borderRadius: 'var(--radius-sm)',
                     textAlign: 'center',
                     fontSize: '0.65rem',
                     fontWeight: '600',
-                    color: 'var(--primary-color)',
+                    color: isRegenerating ? 'var(--text-muted)' : 'var(--primary-color)',
                     flexShrink: 0,
                     minWidth: 0
                   }}>
-                    View Guide
+                    {isRegenerating ? 'Regenerating…' : 'View Guide'}
                   </div>
                 </div>
               )

@@ -209,12 +209,31 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
     )
   }
 
-  return (
-    <div className="test-list">
-      {testList.map((test) => (
-        <div
-          key={test.id}
-          style={{
+  // Group tests by subject (metadata.subject or "Uncategorized")
+  const getSubjectKey = (test) => {
+    const s = test.metadata?.subject
+    return typeof s === 'string' && s.trim() ? s.trim() : 'Uncategorized'
+  }
+  const getSubjectLabel = (key) => {
+    if (key === 'Uncategorized') return key
+    return key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()
+  }
+  const bySubject = {}
+  testList.forEach((test) => {
+    const key = getSubjectKey(test)
+    if (!bySubject[key]) bySubject[key] = []
+    bySubject[key].push(test)
+  })
+  const subjectKeys = Object.keys(bySubject).sort((a, b) => {
+    if (a === 'Uncategorized') return 1
+    if (b === 'Uncategorized') return -1
+    return getSubjectLabel(a).localeCompare(getSubjectLabel(b))
+  })
+
+  const renderTestCard = (test) => (
+    <div
+      key={test.id}
+      style={{
             background: 'var(--bg-tertiary)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-md)',
@@ -364,6 +383,26 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
               Time limit: {test.time_limit_minutes} minutes
             </div>
           )}
+        </div>
+  )
+
+  return (
+    <div className="test-list">
+      {subjectKeys.map((subjectKey) => (
+        <div key={subjectKey} style={{ marginBottom: '2rem' }}>
+          <div style={{
+            fontSize: '0.875rem',
+            fontWeight: '600',
+            color: 'var(--text-muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            marginBottom: '0.75rem',
+            paddingBottom: '0.25rem',
+            borderBottom: '1px solid var(--border-color)'
+          }}>
+            {getSubjectLabel(subjectKey)}
+          </div>
+          {bySubject[subjectKey].map((test) => renderTestCard(test))}
         </div>
       ))}
     </div>

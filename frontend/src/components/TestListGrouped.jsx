@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { tests, isAuthError } from '../services/api'
 import { showNotification } from '../utils/notifications'
 import LoadingSpinner from './LoadingSpinner'
-import TestList from './TestList'
 
 export default function TestListGrouped({ statusFilter = null, onTestSelect, isAdmin = false, onTestDeleted, refreshKey = 0 }) {
   const [groupedTests, setGroupedTests] = useState({})
@@ -134,6 +133,15 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
     return <LoadingSpinner />
   }
 
+  const getSubjectKey = (test) => {
+    const s = test.metadata?.subject
+    return typeof s === 'string' && s.trim() ? s.trim() : 'Uncategorized'
+  }
+  const getSubjectLabel = (key) => {
+    if (key === 'Uncategorized') return key
+    return key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()
+  }
+
   const childIds = Object.keys(groupedTests)
   if (childIds.length === 0) {
     return (
@@ -196,9 +204,35 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
               </div>
             </div>
 
-            {/* Tests List */}
+            {/* Tests List: grouped by subject within this child */}
             <div style={{ padding: '1rem', background: 'var(--bg-secondary)' }}>
-              {group.tests.map((test) => (
+              {(() => {
+                const bySubj = {}
+                ;(group.tests || []).forEach((t) => {
+                  const k = getSubjectKey(t)
+                  if (!bySubj[k]) bySubj[k] = []
+                  bySubj[k].push(t)
+                })
+                const subjKeys = Object.keys(bySubj).sort((a, b) => {
+                  if (a === 'Uncategorized') return 1
+                  if (b === 'Uncategorized') return -1
+                  return getSubjectLabel(a).localeCompare(getSubjectLabel(b))
+                })
+                return subjKeys.map((subjectKey) => (
+                  <div key={subjectKey} style={{ marginBottom: '1.25rem' }}>
+                    <div style={{
+                      fontSize: '0.8rem',
+                      fontWeight: '600',
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '0.5rem',
+                      paddingBottom: '0.25rem',
+                      borderBottom: '1px solid var(--border-color)'
+                    }}>
+                      {getSubjectLabel(subjectKey)}
+                    </div>
+                    {bySubj[subjectKey].map((test) => (
                 <div
                   key={test.id}
                   style={{
@@ -366,6 +400,9 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
                   </div>
                 </div>
               ))}
+                  </div>
+                ))
+              })()}
             </div>
           </div>
         )

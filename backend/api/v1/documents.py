@@ -63,18 +63,17 @@ async def upload_document(
             # Parent/admin can upload for one or more children
             parent_id_param = user_id
             
-            # Parse child_ids if provided (comma-separated)
-            if child_ids:
-                child_ids_list = [cid.strip() for cid in child_ids.split(',') if cid.strip()]
-            
-            # Fallback to single child_id for backward compatibility
-            if not child_ids_list and child_id:
-                child_ids_list = [child_id]
-            
+            # Require child_ids (comma-separated) for parent/admin; no fallback to child_id
+            if not child_ids or not child_ids.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="child_ids is required for parent/admin uploads (comma-separated list of child UUIDs)"
+                )
+            child_ids_list = [cid.strip() for cid in child_ids.split(',') if cid.strip()]
             if not child_ids_list:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="child_id or child_ids is required for parent/admin uploads"
+                    detail="child_ids must contain at least one valid child UUID"
                 )
         
         # Process document

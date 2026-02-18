@@ -298,13 +298,14 @@ class DocumentProcessor:
             concepts_list = concepts_json.get("concepts", [])
             
             if not concepts_list:
-                logger.warning(f"No concepts found in document {document_id}")
                 await self.document_repo.update_status(
                     document_id,
-                    "ready",
-                    processing_completed_at=datetime.utcnow()
+                    "failed",
+                    processing_completed_at=datetime.utcnow(),
+                    failure_stage="concept_extraction",
+                    error_message="Document has no concepts to process"
                 )
-                return {"status": "ready", "message": "No concepts to process"}
+                raise ValueError("Document has no concepts to process. Ensure the document contains extractable concepts.")
             
             def _normalize_concept(concept: Dict[str, Any]) -> Dict[str, Any]:
                 """Normalize workflow concept schema to the internal expected shape."""

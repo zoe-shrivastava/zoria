@@ -523,6 +523,11 @@ export default function StudyGuide({
       }}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          children={(() => {
+            // Preprocess: lines of only = or - (Setext underlines / decorative lines) -> --- so they render as a visible horizontal rule
+            const raw = guide.content || ''
+            return raw.replace(/\n\s*=+\s*\n/g, '\n---\n').replace(/\n\s*-{3,}\s*\n/g, '\n---\n')
+          })()}
           components={{
             // Helper to extract text from React children for LaTeX rendering
             // eslint-disable-next-line react/prop-types
@@ -933,9 +938,7 @@ export default function StudyGuide({
               </a>
             ),
           }}
-        >
-          {guide.content}
-        </ReactMarkdown>
+        />
       </div>
 
       {/* Practice Recommendations */}
@@ -975,7 +978,19 @@ export default function StudyGuide({
         )
         
         if (validErrors.length === 0) return null
-        
+
+        // Friendly labels for error types (display only)
+        const errorLabelMap = {
+          'No_Answer': 'Skipped or unanswered questions',
+          'Partial_Credit': 'Partial credit',
+          'Unit_Mismatch': 'Unit errors',
+          'Conceptual': 'Conceptual misunderstanding',
+          'Procedural': 'Procedural errors',
+          'Arithmetic': 'Calculation errors',
+          'Incorrect': 'Incorrect answers'
+        }
+        const getLabel = (type) => (errorLabelMap[type] || type).trim()
+
         return (
           <div style={{
             background: 'var(--error-color-light)',
@@ -985,7 +1000,7 @@ export default function StudyGuide({
             border: '1px solid var(--error-color)'
           }}>
             <h3 style={{ 
-              marginBottom: '1rem', 
+              marginBottom: '0.5rem', 
               marginTop: 0,
               color: 'var(--error-color)',
               fontSize: '1.375rem',
@@ -993,12 +1008,29 @@ export default function StudyGuide({
               borderBottom: '2px solid var(--error-color)',
               paddingBottom: '0.5rem'
             }}>Common Errors to Avoid</h3>
+            <p style={{ margin: '0 0 1rem 0', fontSize: '0.9375rem', color: 'var(--text-color)' }}>
+              Focus on these to improve next time.
+            </p>
             <ul style={{ margin: 0, paddingLeft: '1.5rem' }}>
-              {validErrors.map((error, idx) => (
-                <li key={idx} style={{ marginBottom: '0.5rem', lineHeight: 1.6 }}>
-                  <MathText text={error} inline={false} />
-                </li>
-              ))}
+              {validErrors.map((error, idx) => {
+                const colonIdx = error.indexOf(': ')
+                const type = colonIdx >= 0 ? error.slice(0, colonIdx).trim() : ''
+                const advice = colonIdx >= 0 ? error.slice(colonIdx + 2).trim() : error
+                const label = type ? getLabel(type) : ''
+                return (
+                  <li key={idx} style={{ marginBottom: '1rem', lineHeight: 1.6, listStyle: 'disc' }}>
+                    {label ? (
+                      <>
+                        <strong style={{ color: 'var(--error-color)' }}>{label}</strong>
+                        <span> — </span>
+                        <MathText text={advice} inline />
+                      </>
+                    ) : (
+                      <MathText text={error} inline={false} />
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </div>
         )

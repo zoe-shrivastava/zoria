@@ -22,6 +22,35 @@ from core.database import Database
 logger = logging.getLogger(__name__)
 
 
+def _normalize_question_latex(q_data: Dict[str, Any]) -> None:
+    """Quiz/question-generation only: normalize over-escaped LaTeX (\\\\ -> \).
+    Do not reuse for study guide or revision cards; they have their own normalizers."""
+    def fix(s):
+        if s is None or not isinstance(s, str):
+            return s
+        return s.replace("\\\\", "\\")
+    if "question_text" in q_data and q_data["question_text"]:
+        q_data["question_text"] = fix(q_data["question_text"])
+    if "hint" in q_data and q_data["hint"]:
+        q_data["hint"] = fix(q_data["hint"])
+    if "expected_answer" in q_data and q_data["expected_answer"]:
+        q_data["expected_answer"] = fix(q_data["expected_answer"])
+    if "options" in q_data and isinstance(q_data["options"], list):
+        for opt in q_data["options"]:
+            if isinstance(opt, dict) and opt.get("text"):
+                opt["text"] = fix(opt["text"])
+    if "solution_steps" in q_data and isinstance(q_data["solution_steps"], list):
+        q_data["solution_steps"] = [
+            fix(step) if isinstance(step, str) else step
+            for step in q_data["solution_steps"]
+        ]
+    if "diagram_code" in q_data and q_data["diagram_code"]:
+        q_data["diagram_code"] = fix(q_data["diagram_code"])
+    if q_data.get("metadata") and isinstance(q_data["metadata"], dict):
+        if q_data["metadata"].get("diagram_code"):
+            q_data["metadata"]["diagram_code"] = fix(q_data["metadata"]["diagram_code"])
+
+
 class QuestionGenerationService:
     """Service for generating questions using local LLM with semantic deduplication."""
     
@@ -342,12 +371,12 @@ JSON SCHEMA:
         if format_rules:
             system_prompt += f"\n\nFormat requirements:\n{format_rules}"
 
-        # Build user prompt (your template + strict JSON schema for reliable parsing)
+        # Subtopics for this concept = granular concept name (same as Concept line for single-concept).
         prompt = f"""## User Input
 
 **Concept:** {concept_name}
 **Topics (selected):** {selected_topics_str}
-**Subtopics for this concept:** {subtopic_str}
+**Subtopics for this concept:** {concept_name}
 
 **Instruction for AI:**
 Using the Context provided, generate {num_questions} questions. Choose the most appropriate question type for each question based on the content:
@@ -407,6 +436,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             # Process each question into blueprint format
             processed_questions = []
             for q_data in questions_list:
+                _normalize_question_latex(q_data)
                 # Ensure options are in correct format
                 if "options" in q_data and isinstance(q_data["options"], list):
                     option_objs = []
@@ -666,7 +696,7 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
     * `hard`: Distribution of Easy, Medium, and Hard.
 
 ### 2. LaTeX, Units & Currency (Strict JSON Formatting)
-* **Double-Escaping Requirement:** You MUST use double-backslashes (`\\`) for all LaTeX commands within the JSON string (e.g., `"\\text{{kg}}"`, `"\\Delta"`, `"\\frac"`). Failure to do so causes "missing character" errors like `\ext`.
+* **LaTeX in JSON:** Use exactly one backslash per LaTeX command in the JSON string: write `\\text` not `\\\\text` (e.g. `"$20 \\text{{ m s}}^{{-1}}$"`). One backslash in JSON is written as `\\`. Do NOT double-escape.
 * **Unit Formatting:** Always use the format `$Value \\text{{ Unit}}$`. 
     * **Space:** Ensure exactly one standard space between the number and the `\\text` command. 
     * **Prohibition:** DO NOT use `\\;` or other internal LaTeX spacing inside the `\\text{{}}` block.
@@ -678,7 +708,7 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
     * **Spatial Scenarios:** Inclined planes, pulleys, vector addition, or geometric shapes.
     * **Data/Functions:** Coordinate geometry, functional graphs, or statistical charts.
     * **Logic/Flow:** Timelines, cause-effect flowcharts, or logic trees.
-    * *Rule:* If the student's understanding would be improved by a visual reference, generate the code. Use double-backslashes (`\\`) for all TikZ commands.
+    * *Rule:* If the student's understanding would be improved by a visual reference, generate the code. Use `\\` for each LaTeX/TikZ command (e.g. `\\begin`, `\\end`), not `\\\\`.
 * **Interactive Flags (Student Input Response):**
     * **needs_graph**: Set to `true` ONLY if the question explicitly asks the student to plot or sketch a graph as part of their answer.
     * **needs_diagram**: Set to `true` ONLY if the question asks the student to draw a diagram (e.g., free-body diagram) as part of their answer.
@@ -711,12 +741,12 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
         if format_rules:
             system_prompt += f"\n\nFormat requirements:\n{format_rules}"
 
-        # Build user prompt to match the single-concept instruction block format
+        # Subtopics for these concepts = granular concept names (e.g. Speed & Velocity), not the broad topic.
         prompt = f"""## User Input
 
 **Concepts:** {concepts_list_str}
 **Topics (selected):** {selected_topics_str}
-**Subtopics for these concepts:** {subtopics_str}
+**Subtopics for these concepts:** {concepts_list_str}
 
 **Instruction for AI:**
 Using the Context provided, generate {num_questions} questions.
@@ -783,6 +813,7 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             total_failed_validation = 0
             
             for q_data in questions_list:
+                _normalize_question_latex(q_data)
                 # Try to match question to concept by concept_name in response
                 question_concept_name = q_data.get("concept_name", "").lower()
                 matched_concept_id = None

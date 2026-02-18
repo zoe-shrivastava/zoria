@@ -1,5 +1,14 @@
 # Running Database Migrations
 
+**If Child "My Profile" fails with `column "preferred_language" does not exist`**, run migration 018:
+
+```bash
+cd zoria
+docker-compose exec backend python database/migrate.py
+# or run only 018:
+./backend/database/run_migration_018.sh
+```
+
 ## Option 1: Using Docker (Recommended)
 
 ### Run migrations inside the backend container:

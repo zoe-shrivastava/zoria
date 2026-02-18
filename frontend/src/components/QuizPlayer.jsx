@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import DiffMatchPatch from 'diff-match-patch'
 import { tests } from '../services/api'
 import { showNotification } from '../utils/notifications'
 import LoadingSpinner from './LoadingSpinner'
@@ -13,6 +14,9 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState({})
   const [timeRemaining, setTimeRemaining] = useState(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [testStartTimeMs, setTestStartTimeMs] = useState(null)
+  const testStartTimeRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [started, setStarted] = useState(false)
@@ -24,8 +28,28 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
   const [isGraphRendering, setIsGraphRendering] = useState(false)
   
   // Behavioral tracking state per question
-  const [behavioralData, setBehavioralData] = useState({}) // { questionId: { edit_count, hints_accessed, latency_ms, idle_time_ms, confidence_score, question_start_time, last_activity_time } }
+  const [behavioralData, setBehavioralData] = useState({}) // { questionId: { edit_count, hints_accessed, latency_ms, idle_time_ms, confidence_score, question_start_time, last_activity_time, navigation_actions } }
   const [confidenceScores, setConfidenceScores] = useState({}) // { questionId: 1-5 }
+
+  // Snapshot-based edit count for text questions (diff-match-patch)
+  const dmpRef = useRef(null)
+  const textBaselineRef = useRef({}) // questionId -> last snapshot text
+  const textSnapshotTimeoutRef = useRef(null)
+  const lastTextRef = useRef({}) // questionId -> current text when snapshot runs
+
+  // Parse server datetime as UTC (server sends timezone-naive UTC; without Z, JS treats as local)
+  const parseStartedAt = (value) => {
+    if (value == null) return NaN
+    const s = typeof value === 'string' ? value : String(value)
+    const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(s)
+    return new Date(hasTz ? s : s.replace(/\.\d+$/, '') + 'Z').getTime()
+  }
+
+  useEffect(() => {
+    return () => {
+      if (textSnapshotTimeoutRef.current) clearTimeout(textSnapshotTimeoutRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     loadTest()
@@ -34,7 +58,15 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
   useEffect(() => {
     if (test && test.time_limit_minutes && started && !readOnly) {
       const totalSeconds = test.time_limit_minutes * 60
-      setTimeRemaining(totalSeconds)
+      let initialRemaining = totalSeconds
+      if (test.started_at) {
+        const startedAtMs = parseStartedAt(test.started_at)
+        if (!isNaN(startedAtMs)) {
+          const elapsedSeconds = Math.floor((Date.now() - startedAtMs) / 1000)
+          initialRemaining = Math.max(0, totalSeconds - Math.max(0, elapsedSeconds))
+        }
+      }
+      setTimeRemaining(initialRemaining)
 
       const interval = setInterval(() => {
         setTimeRemaining((prev) => {
@@ -50,6 +82,35 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       return () => clearInterval(interval)
     }
   }, [test, started, readOnly])
+
+  // Elapsed timer: set start time when test starts (or restore from test.started_at on resume)
+  useEffect(() => {
+    if (!started || readOnly) return
+    if (test?.started_at) {
+      const startedAtMs = parseStartedAt(test.started_at)
+      if (!isNaN(startedAtMs)) {
+        testStartTimeRef.current = startedAtMs
+        setTestStartTimeMs(startedAtMs)
+        setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)))
+        return
+      }
+    }
+    if (testStartTimeRef.current === null) {
+      const now = Date.now()
+      testStartTimeRef.current = now
+      setTestStartTimeMs(now)
+    }
+  }, [started, readOnly, test?.started_at])
+
+  useEffect(() => {
+    if (!test || !started || readOnly || test.time_limit_minutes || test?.status === 'completed' || submitting) return
+    const startMs = testStartTimeMs ?? testStartTimeRef.current ?? (test?.started_at ? parseStartedAt(test.started_at) : null)
+    if (startMs == null || isNaN(startMs)) return
+    const elapsed = () => Math.max(0, Math.floor((Date.now() - startMs) / 1000))
+    setElapsedSeconds(elapsed())
+    const interval = setInterval(() => setElapsedSeconds(elapsed()), 1000)
+    return () => clearInterval(interval)
+  }, [test?.id, test?.status, started, readOnly, test?.time_limit_minutes, submitting, testStartTimeMs])
 
   // Monitor for graph/diagram rendering status
   useEffect(() => {
@@ -96,6 +157,31 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     }
   }, [currentQuestionIndex]) // Re-run when question changes
 
+  // When graph/diagram finishes rendering, start the question timer (question_start_time)
+  useEffect(() => {
+    if (isGraphRendering || readOnly || !started || !test?.questions?.length) return
+    const questions = test.questions
+    const currentQuestion = questions[currentQuestionIndex]
+    if (!currentQuestion?.question_id) return
+    const needsGraph = currentQuestion.metadata?.needs_graph === true
+    const needsDiagram = currentQuestion.metadata?.needs_diagram === true
+    if (!needsGraph && !needsDiagram) return
+    const questionId = currentQuestion.question_id
+    setBehavioralData(prev => {
+      const b = prev[questionId]
+      if (!b || b.question_start_time != null) return prev
+      const now = Date.now()
+      return {
+        ...prev,
+        [questionId]: {
+          ...b,
+          question_start_time: now,
+          last_activity_time: now
+        }
+      }
+    })
+  }, [isGraphRendering, currentQuestionIndex, test?.questions, readOnly, started])
+
   // Initialize canvas visibility and behavioral tracking when question changes
   // This must be before any early returns to follow React hooks rules
   useEffect(() => {
@@ -116,7 +202,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
         }))
         
         // Initialize behavioral tracking for this question if not already started
-        // Only initialize if test is active and not read-only
+        // For graph/diagram questions, leave question_start_time null until render completes (timer paused)
+        const hasGraphOrDiagram = needsGraph || needsDiagram
         if (!readOnly && started && !behavioralData[questionId]) {
           const now = Date.now()
           setBehavioralData(prev => ({
@@ -124,22 +211,25 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
             [questionId]: {
               edit_count: 0,
               hints_accessed: 0,
-              latency_ms: null, // Will be set when first answer is provided
+              latency_ms: null,
               idle_time_ms: 0,
-              question_start_time: now,
-              last_activity_time: now,
+              question_start_time: hasGraphOrDiagram ? null : now,
+              last_activity_time: hasGraphOrDiagram ? null : now,
               confidence_score: null
             }
           }))
         } else if (!readOnly && started && behavioralData[questionId]) {
-          // Update last activity time when switching to this question
-          setBehavioralData(prev => ({
-            ...prev,
-            [questionId]: {
-              ...prev[questionId],
-              last_activity_time: Date.now()
-            }
-          }))
+          const existing = behavioralData[questionId]
+          // Only update last_activity_time when timer has started (not waiting for graph/diagram render)
+          if (!hasGraphOrDiagram || existing.question_start_time != null) {
+            setBehavioralData(prev => ({
+              ...prev,
+              [questionId]: {
+                ...prev[questionId],
+                last_activity_time: Date.now()
+              }
+            }))
+          }
         }
       }
     }
@@ -161,11 +251,13 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       setBehavioralData(prev => {
         const behavioral = prev[questionId]
         if (!behavioral) return prev
-        
+        // Don't count idle time while question timer is paused (e.g. graph/diagram still rendering)
+        if (behavioral.question_start_time == null) return prev
+
         const now = Date.now()
         const lastActivity = behavioral.last_activity_time || behavioral.question_start_time
         const timeSinceLastActivity = now - lastActivity
-        
+
         // Update idle time if user hasn't been active for more than 1 second
         if (timeSinceLastActivity > 1000) {
           const elapsed = now - lastCheckTime
@@ -190,37 +282,126 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       setLoading(true)
       const testData = await tests.get(testId)
       setTest(testData)
-      
-      // Load existing answers
+
+      // Helper to parse answer text (for baseline init); mirrors parseAnswer shape
+      const getAnswerText = (answer) => {
+        if (!answer) return ''
+        if (typeof answer === 'string') {
+          try {
+            const p = JSON.parse(answer)
+            if (p && typeof p === 'object' && ('text' in p || 'graph' in p || 'diagram' in p)) return p.text || ''
+            return answer
+          } catch (_) { return answer }
+        }
+        return typeof answer?.text === 'string' ? answer.text : ''
+      }
+
+      // Load existing answers and behavioral data from DB (for resume)
       const existingAnswers = {}
+      const initialBehavioral = {}
+      const textQuestionTypes = ['short_answer', 'problem_solving', 'conceptual_question']
+
       if (testData.questions) {
         testData.questions.forEach((q) => {
+          const qId = q.question_id
           if (q.answer) {
-            existingAnswers[q.question_id] = q.answer
-            // Debug: Log loaded answers
-            console.log('Loaded answer for question:', {
-              questionId: q.question_id,
-              answerType: typeof q.answer,
-              answerLength: q.answer?.length,
-              answerPreview: typeof q.answer === 'string' 
-                ? q.answer.substring(0, 100) 
-                : JSON.stringify(q.answer).substring(0, 100)
-            })
+            existingAnswers[qId] = q.answer
+            const text = getAnswerText(q.answer)
+            if (textQuestionTypes.includes(q.type)) {
+              lastTextRef.current[qId] = text
+              textBaselineRef.current[qId] = text
+            }
+          }
+          const meta = q.response_metadata
+          if (meta && typeof meta === 'object') {
+            initialBehavioral[qId] = {
+              edit_count: meta.edit_count ?? 0,
+              hints_accessed: meta.hints_accessed ?? 0,
+              latency_ms: meta.latency_ms ?? null,
+              idle_time_ms: meta.idle_time_ms ?? 0,
+              confidence_score: meta.confidence_score ?? null,
+              navigation_actions: Array.isArray(meta.navigation_actions) ? meta.navigation_actions : [],
+              question_start_time: meta.question_start_time ?? null,
+              last_activity_time: meta.last_activity_time ?? null
+            }
           }
         })
       }
       setAnswers(existingAnswers)
-      console.log('All loaded answers:', existingAnswers)
+      if (Object.keys(initialBehavioral).length > 0) {
+        setBehavioralData(initialBehavioral)
+      }
 
-      // Check if test is already started
+      // Check if test is already started (resume)
       if (testData.status === 'active' || testData.status === 'completed') {
         setStarted(true)
+        if (testData.started_at) {
+          const startedAtMs = parseStartedAt(testData.started_at)
+          if (!isNaN(startedAtMs)) {
+            testStartTimeRef.current = startedAtMs
+            setTestStartTimeMs(startedAtMs)
+            setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)))
+          }
+        } else if (testData.status === 'active' && !readOnly) {
+          // Backfill: test was set active without started_at (e.g. old generation). Call start to set it.
+          try {
+            const startResponse = await tests.start(testId)
+            if (startResponse?.started_at) {
+              const startedAtMs = parseStartedAt(startResponse.started_at)
+              if (!isNaN(startedAtMs)) {
+                testStartTimeRef.current = startedAtMs
+                setTestStartTimeMs(startedAtMs)
+                setElapsedSeconds(0)
+                setTest((prev) => (prev ? { ...prev, started_at: startResponse.started_at } : prev))
+              }
+            }
+          } catch (err) {
+            console.warn('Could not backfill started_at:', err)
+          }
+        }
       }
     } catch (error) {
       showNotification(error.message || 'Failed to load test', 'error')
     } finally {
       setLoading(false)
     }
+  }
+
+  // Whether this question type uses snapshot-based edit count (text only)
+  const isTextQuestion = (questionId) => {
+    const q = test?.questions?.find((qu) => qu.question_id === questionId)
+    return ['short_answer', 'problem_solving', 'conceptual_question'].includes(q?.type)
+  }
+
+  const scheduleTextSnapshot = (questionId) => {
+    if (textSnapshotTimeoutRef.current) clearTimeout(textSnapshotTimeoutRef.current)
+    textSnapshotTimeoutRef.current = setTimeout(() => {
+      onTextSnapshot(questionId)
+      textSnapshotTimeoutRef.current = null
+    }, 2000)
+  }
+
+  const onTextSnapshot = (questionId) => {
+    const currentText = lastTextRef.current[questionId] ?? ''
+    let baseline = textBaselineRef.current[questionId]
+    if (baseline === undefined) {
+      textBaselineRef.current[questionId] = currentText
+      return
+    }
+    if (!dmpRef.current) dmpRef.current = new DiffMatchPatch()
+    const diffs = dmpRef.current.diff_main(baseline, currentText)
+    const hasDeletions = diffs.some(([op]) => op === -1)
+    if (hasDeletions) {
+      setBehavioralData((prev) => ({
+        ...prev,
+        [questionId]: {
+          ...(prev[questionId] || {}),
+          edit_count: (prev[questionId]?.edit_count || 0) + 1,
+          last_activity_time: Date.now()
+        }
+      }))
+    }
+    textBaselineRef.current[questionId] = currentText
   }
 
   // Helper to parse answer (could be string or JSON object)
@@ -294,8 +475,10 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     const filtered = Object.fromEntries(
       Object.entries(combined).filter(([_, v]) => v !== null && v !== '')
     )
-    
-    // Always stringify to ensure consistent format
+    // When user clears everything (e.g. text box), avoid storing "{}" so the answer stays empty
+    if (Object.keys(filtered).length === 0) {
+      return ''
+    }
     // If only one field, still stringify it (but as a single value)
     if (Object.keys(filtered).length === 1) {
       const singleValue = Object.values(filtered)[0]
@@ -318,6 +501,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     let newCombined
     if (component === 'text') {
       newCombined = combineAnswer(value, parsed.graph, parsed.diagram)
+      lastTextRef.current[questionId] = value
+      if (!readOnly && started) scheduleTextSnapshot(questionId)
     } else if (component === 'graph') {
       newCombined = combineAnswer(parsed.text, value, parsed.diagram)
     } else if (component === 'diagram') {
@@ -355,8 +540,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       const behavioral = behavioralData[questionId] || {}
       const questionStartTime = behavioral.question_start_time || now
       
-      // Track edit count (increment if answer changed)
-      if (isNewAnswer && previousAnswer !== undefined) {
+      // Track edit count (increment if answer changed). Text questions use snapshot-based count instead.
+      if (isNewAnswer && previousAnswer !== undefined && !isTextQuestion(questionId)) {
         setBehavioralData(prev => ({
           ...prev,
           [questionId]: {
@@ -405,7 +590,8 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
           idle_time_ms: behavioral.idle_time_ms || 0,
           edit_count: behavioral.edit_count || 0,
           hints_accessed: behavioral.hints_accessed || 0,
-          confidence_score: confidence || null
+          confidence_score: confidence || null,
+          navigation_actions: Array.isArray(behavioral.navigation_actions) ? behavioral.navigation_actions : []
         }
         
         console.log('Saving answer with behavioral data:', {
@@ -450,6 +636,35 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     } finally {
       setSubmitting(false)
     }
+  }
+
+  // Record navigation action for current question then go to new index (for behavioral / session state inference)
+  const recordNavigationAndGo = (action, newIndex) => {
+    const questions = test?.questions || []
+    const currentQ = questions[currentQuestionIndex]
+    if (currentQ?.question_id && !readOnly && started) {
+      const prevBehavioral = behavioralData[currentQ.question_id] || {}
+      const newNav = [...(prevBehavioral.navigation_actions || []), action]
+      const updated = { ...prevBehavioral, navigation_actions: newNav }
+      setBehavioralData(prev => ({
+        ...prev,
+        [currentQ.question_id]: { ...(prev[currentQ.question_id] || {}), ...updated }
+      }))
+      // Persist navigation_actions to backend (fire-and-forget) so state inference gets it even if user doesn't change answer
+      const answer = answers[currentQ.question_id]
+      const answerString = answer !== undefined ? (typeof answer === 'string' ? answer : JSON.stringify(answer)) : ''
+      const confidence = confidenceScores[currentQ.question_id] ?? prevBehavioral.confidence_score
+      const payload = {
+        latency_ms: prevBehavioral.latency_ms ?? null,
+        idle_time_ms: prevBehavioral.idle_time_ms ?? 0,
+        edit_count: prevBehavioral.edit_count ?? 0,
+        hints_accessed: prevBehavioral.hints_accessed ?? 0,
+        confidence_score: confidence ?? null,
+        navigation_actions: newNav
+      }
+      tests.answer(testId, currentQ.question_id, answerString, null, payload).catch(() => {})
+    }
+    setCurrentQuestionIndex(newIndex)
   }
 
   const formatTime = (seconds) => {
@@ -1232,9 +1447,11 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2>{test.title}</h2>
-          {timeRemaining !== null && (
+          {(timeRemaining !== null || (started && !isCompleted && !test?.time_limit_minutes)) && (
             <div style={{ marginTop: '0.5rem', fontSize: '1.25rem', fontWeight: '600' }}>
-              Time: {formatTime(timeRemaining)}
+              {timeRemaining !== null
+                ? `Time: ${formatTime(timeRemaining)}`
+                : `Elapsed: ${formatTime(elapsedSeconds)}`}
             </div>
           )}
         </div>
@@ -2105,44 +2322,51 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       {!isCompleted && (
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
         <button
-          onClick={() => setCurrentQuestionIndex(Math.max(0, currentQuestionIndex - 1))}
+          onClick={() => recordNavigationAndGo('previous', Math.max(0, currentQuestionIndex - 1))}
           disabled={submitting || currentQuestionIndex === 0 || isGraphRendering}
           className="btn-secondary"
           title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : ''}
         >
           Previous
         </button>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {questions.map((_, idx) => (
-            <button
-              key={idx}
-              onClick={() => setCurrentQuestionIndex(idx)}
-              disabled={submitting || isGraphRendering}
-              style={{
-                width: '32px',
-                height: '32px',
-                padding: 0,
-                borderRadius: '50%',
-                border: `2px solid ${
-                  answers[questions[idx].question_id]
-                    ? 'var(--primary-color)'
-                    : 'var(--border-color)'
-                }`,
-                background: currentQuestionIndex === idx
-                  ? 'var(--primary-color)'
-                  : answers[questions[idx].question_id]
-                  ? 'var(--primary-color-light)'
-                  : 'transparent',
-                color: currentQuestionIndex === idx ? 'white' : 'inherit',
-                cursor: 'pointer',
-              }}
-              title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : `Question ${idx + 1}`}
-            />
-          ))}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {questions.map((_, idx) => {
+            const qId = questions[idx].question_id
+            const hasAnswer = answers[qId] !== undefined && answers[qId] !== null && answers[qId] !== ''
+            const isCurrent = currentQuestionIndex === idx
+            const filled = hasAnswer || isCurrent
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => recordNavigationAndGo(idx > currentQuestionIndex ? 'next' : 'previous', idx)}
+                disabled={submitting || isGraphRendering}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  padding: 0,
+                  borderRadius: '50%',
+                  border: `2px solid ${filled ? 'var(--primary-color, #1a73e8)' : 'var(--border-color, #dadce0)'}`,
+                  background: filled ? 'var(--primary-color, #1a73e8)' : 'transparent',
+                  color: filled ? '#fff' : 'var(--text-color, #202124)',
+                  cursor: submitting || isGraphRendering ? 'not-allowed' : 'pointer',
+                  boxShadow: isCurrent ? '0 0 0 2px var(--bg-primary, #fff)' : 'none',
+                  fontSize: '0.75rem',
+                  fontWeight: isCurrent ? '700' : '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : `Question ${idx + 1}${hasAnswer ? ' (answered)' : ''}`}
+              >
+                {idx + 1}
+              </button>
+            )
+          })}
         </div>
         {currentQuestionIndex < questions.length - 1 ? (
           <button
-            onClick={() => setCurrentQuestionIndex(Math.min(questions.length - 1, currentQuestionIndex + 1))}
+            onClick={() => recordNavigationAndGo('next', Math.min(questions.length - 1, currentQuestionIndex + 1))}
             disabled={submitting || isGraphRendering}
             className="btn-primary"
             title={isGraphRendering ? 'Please wait for diagrams to finish rendering' : ''}

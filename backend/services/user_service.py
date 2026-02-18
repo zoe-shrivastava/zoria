@@ -155,7 +155,13 @@ class UserService:
             "age": child.get("age"),
             "avatar_url": child.get("avatar_url"),
             "created_at": child["created_at"],
-            "is_active": child["is_active"]
+            "is_active": child["is_active"],
+            "preferred_language": child.get("preferred_language"),
+            "interaction_tone": child.get("interaction_tone"),
+            "example_preferences": child.get("example_preferences"),
+            "interests": child.get("interests"),
+            "sensitive_topics_to_avoid": child.get("sensitive_topics_to_avoid"),
+            "prefer_indirect_guidance": child.get("prefer_indirect_guidance"),
         }
     
     async def get_child(self, child_id: str, parent_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -189,7 +195,13 @@ class UserService:
             "age": child.get("age"),
             "avatar_url": child.get("avatar_url"),
             "created_at": child["created_at"],
-            "is_active": child["is_active"]
+            "is_active": child["is_active"],
+            "preferred_language": child.get("preferred_language"),
+            "interaction_tone": child.get("interaction_tone"),
+            "example_preferences": child.get("example_preferences"),
+            "interests": child.get("interests"),
+            "sensitive_topics_to_avoid": child.get("sensitive_topics_to_avoid"),
+            "prefer_indirect_guidance": child.get("prefer_indirect_guidance"),
         }
     
     async def list_children(self, parent_id: Optional[str] = None, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
@@ -223,7 +235,13 @@ class UserService:
                 "age": c.get("age"),
                 "avatar_url": c.get("avatar_url"),
                 "created_at": c["created_at"],
-                "is_active": c["is_active"]
+                "is_active": c["is_active"],
+                "preferred_language": c.get("preferred_language"),
+                "interaction_tone": c.get("interaction_tone"),
+                "example_preferences": c.get("example_preferences"),
+                "interests": c.get("interests"),
+                "sensitive_topics_to_avoid": c.get("sensitive_topics_to_avoid"),
+                "prefer_indirect_guidance": c.get("prefer_indirect_guidance"),
             }
             for c in children
         ]
@@ -236,7 +254,13 @@ class UserService:
         pin: Optional[str] = None,
         grade: Optional[str] = None,
         age: Optional[int] = None,
-        avatar_url: Optional[str] = None
+        avatar_url: Optional[str] = None,
+        preferred_language: Optional[str] = None,
+        interaction_tone: Optional[str] = None,
+        example_preferences: Optional[str] = None,
+        interests: Optional[str] = None,
+        sensitive_topics_to_avoid: Optional[str] = None,
+        prefer_indirect_guidance: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Update child profile.
         
@@ -248,6 +272,12 @@ class UserService:
             grade: Child grade
             age: Child age
             avatar_url: Avatar URL
+            preferred_language: Preferred language for content
+            interaction_tone: playful, encouraging, direct, gentle
+            example_preferences: storytelling, step-by-step, factual
+            interests: Comma-separated interests
+            sensitive_topics_to_avoid: Topics to avoid
+            prefer_indirect_guidance: Use indirect phrasing for emotional topics
             
         Returns:
             Updated child information
@@ -277,7 +307,13 @@ class UserService:
             pin_hash=pin_hash,
             grade=grade,
             age=age,
-            avatar_url=avatar_url
+            avatar_url=avatar_url,
+            preferred_language=preferred_language,
+            interaction_tone=interaction_tone,
+            example_preferences=example_preferences,
+            interests=interests,
+            sensitive_topics_to_avoid=sensitive_topics_to_avoid,
+            prefer_indirect_guidance=prefer_indirect_guidance
         )
         
         # Get updated child
@@ -291,7 +327,74 @@ class UserService:
             "age": updated.get("age"),
             "avatar_url": updated.get("avatar_url"),
             "created_at": updated["created_at"],
-            "is_active": updated["is_active"]
+            "is_active": updated["is_active"],
+            "preferred_language": updated.get("preferred_language"),
+            "interaction_tone": updated.get("interaction_tone"),
+            "example_preferences": updated.get("example_preferences"),
+            "interests": updated.get("interests"),
+            "sensitive_topics_to_avoid": updated.get("sensitive_topics_to_avoid"),
+            "prefer_indirect_guidance": updated.get("prefer_indirect_guidance"),
+        }
+    
+    async def update_child_preferences(
+        self,
+        child_id: str,
+        **preferences: Any
+    ) -> Dict[str, Any]:
+        """Update only preference fields for a child (e.g. when child updates own profile).
+        
+        Args:
+            child_id: Child UUID
+            **preferences: preferred_language, interaction_tone, example_preferences,
+                          interests, sensitive_topics_to_avoid, prefer_indirect_guidance
+            
+        Returns:
+            Updated child information
+        """
+        allowed = {
+            "preferred_language", "interaction_tone", "example_preferences",
+            "interests", "sensitive_topics_to_avoid", "prefer_indirect_guidance"
+        }
+        payload = {k: v for k, v in preferences.items() if k in allowed}
+        if not payload:
+            child = await self.user_repo.get_child_by_id(child_id)
+            if not child:
+                raise ValueError("Child not found")
+            return {
+                "id": str(child["id"]),
+                "parent_id": str(child["parent_id"]),
+                "name": child["name"],
+                "child_code": child.get("child_code"),
+                "grade": child.get("grade"),
+                "age": child.get("age"),
+                "avatar_url": child.get("avatar_url"),
+                "created_at": child["created_at"],
+                "is_active": child["is_active"],
+                "preferred_language": child.get("preferred_language"),
+                "interaction_tone": child.get("interaction_tone"),
+                "example_preferences": child.get("example_preferences"),
+                "interests": child.get("interests"),
+                "sensitive_topics_to_avoid": child.get("sensitive_topics_to_avoid"),
+                "prefer_indirect_guidance": child.get("prefer_indirect_guidance"),
+            }
+        await self.user_repo.update_child(child_id=child_id, **payload)
+        updated = await self.user_repo.get_child_by_id(child_id)
+        return {
+            "id": str(updated["id"]),
+            "parent_id": str(updated["parent_id"]),
+            "name": updated["name"],
+            "child_code": updated.get("child_code"),
+            "grade": updated.get("grade"),
+            "age": updated.get("age"),
+            "avatar_url": updated.get("avatar_url"),
+            "created_at": updated["created_at"],
+            "is_active": updated["is_active"],
+            "preferred_language": updated.get("preferred_language"),
+            "interaction_tone": updated.get("interaction_tone"),
+            "example_preferences": updated.get("example_preferences"),
+            "interests": updated.get("interests"),
+            "sensitive_topics_to_avoid": updated.get("sensitive_topics_to_avoid"),
+            "prefer_indirect_guidance": updated.get("prefer_indirect_guidance"),
         }
     
     async def delete_child(self, child_id: str, parent_id: str) -> None:

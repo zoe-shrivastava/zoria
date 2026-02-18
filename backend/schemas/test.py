@@ -45,6 +45,7 @@ class TestQuestionResponse(BaseModel):
     score: Optional[float] = None
     is_correct: Optional[bool] = None
     detailed_feedback: Optional[str] = Field(None, description="Detailed feedback about what is wrong, what is missing, or what is correct")
+    response_metadata: Optional[Dict[str, Any]] = Field(None, description="Behavioral data (edit_count, hints_accessed, latency_ms, etc.) for resume")
 
 
 class TestResponse(BaseModel):
@@ -62,6 +63,7 @@ class TestResponse(BaseModel):
     time_limit_minutes: Optional[int]
     created_at: datetime
     questions: List[TestQuestionResponse] = []
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class TestListResponse(BaseModel):

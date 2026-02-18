@@ -1,6 +1,7 @@
 """Service for generating personalized study guides."""
 
 import logging
+import re
 import uuid
 import json
 from typing import Dict, Any, Optional, List
@@ -8,8 +9,60 @@ from typing import Dict, Any, Optional, List
 from services.llm_service import LLMService
 from database.repositories.concept_repository import ConceptRepository
 from core.database import Database
+from core.child_context import get_child_context
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_study_guide_revision_latex(text: Optional[str]) -> Optional[str]:
+    """Study guide body only: collapse over-escaped LaTeX (\\\\ -> \).
+    Do not use for revision cards; use normalize_revision_card_latex() instead.
+    Do not reuse for quiz; question_generation_service has its own normalizer."""
+    if text is None or not isinstance(text, str):
+        return text
+    out = text
+    while "\\\\" in out:
+        out = out.replace("\\\\", "\\")
+    return out
+
+
+def normalize_revision_card_latex(text: str) -> str:
+    """Single pipeline for revision-card LaTeX only. Apply to card front/back when building or serving.
+    Do not use on study guide body or quiz content.
+    Steps: (1) control chars from JSON (\\b/\\t/\\f), (2) \\textDelta/\\textdelta,
+    (3) unclosed \\[...], (4) collapse \\\\ -> \\, (5) rac{/ext{ lost backslash,
+    (6) stray $1\\text, (7) \\frac/\\f/frac double-fix cleanup."""
+    if not text or not isinstance(text, str):
+        return text or ""
+    out = text
+    # 1) JSON escape damage: \boxed -> \b+oxed, \text -> \t+ext, \frac -> \f+rac
+    out = re.sub(r"\x08oxed", r"\\boxed", out)
+    out = re.sub(r"\x09ext", r"\\text", out)
+    out = re.sub(r"\x0crac", r"\\frac", out)
+    out = re.sub(r"\x0c([a-z]+)", r"\\\1", out)
+    out = re.sub(r"\x0c(?!\w)", "", out)
+    out = re.sub(r"\x0c\\", r"\\", out)
+    # 2) KaTeX: \textDelta / \textdelta -> \Delta, \delta
+    out = out.replace("\\textDelta", "\\Delta")
+    out = out.replace("\\textdelta", "\\delta")
+    # 3) Display math missing \]: \[...] at line/s end -> \[...\]
+    out = re.sub(r"\\\[([\s\S]*?)\](?=\s*(\n|$))", r"\\[\1\\]", out)
+    # 4) Over-escaped backslashes
+    while "\\\\" in out:
+        out = out.replace("\\\\", "\\")
+    # 5) Lost backslash: rac{ -> \frac{, ext{ -> \text{
+    out = re.sub(r"([^\\])rac\{", r"\1\\frac{", out)
+    out = re.sub(r"^rac\{", r"\\frac{", out)
+    out = re.sub(r"([^\\])ext\{", r"\1\\text{", out)
+    out = re.sub(r"^ext\{", r"\\text{", out)
+    # 6) Stray $1\text (e.g. from \b eating a char)
+    out = re.sub(r"\$1\\text\{", r"$\\text{", out)
+    # 7) Double-fix cleanup
+    out = out.replace("\\frac\\frac", "\\frac")
+    out = re.sub(r"\\f\\frac", "\\frac", out)
+    out = re.sub(r"\\fracrac\{?", "\\frac{", out)
+    out = re.sub(r"\\fracrac", "\\frac", out)
+    return out
 
 
 class StudyGuideService:
@@ -44,6 +97,8 @@ class StudyGuideService:
         sample_questions: Optional[List[Dict]] = None,
         force_regenerate: bool = False,
         language: Optional[str] = None,
+        topic_from_test: Optional[str] = None,
+        topics_from_test: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Generate a personalized study guide for a focus area.
         
@@ -58,11 +113,13 @@ class StudyGuideService:
             misconceptions: List of misconceptions
             sample_questions: Sample questions that were answered incorrectly
             language: Language for guide and cards (e.g. 'English', 'Hindi', 'Spanish'). None = English.
+            topic_from_test: Primary topic from the test that triggered this focus area (overrides concept-based topic).
+            topics_from_test: List of topics from test metadata (from tests that contributed to this focus area).
             
         Returns:
             Dictionary with study guide data
         """
-        logger.info(f"generate_study_guide called: child_id={child_id}, concept={concept_name}, focus_area={focus_area}, force_regenerate={force_regenerate}")
+        logger.info(f"generate_study_guide called: child_id={child_id}, concept={concept_name}, focus_area={focus_area}, force_regenerate={force_regenerate}, topic_from_test={topic_from_test}, topics_from_test={topics_from_test}")
         
         # Check if study guide already exists (unless forcing regeneration)
         if not force_regenerate:
@@ -98,6 +155,18 @@ class StudyGuideService:
             # Check if guide exists - we'll update it instead of deleting
             # This preserves the same guide_id
         
+        # Require subject and topic from test (no fallbacks)
+        if not subject or not str(subject).strip():
+            raise ValueError("Study guide requires subject. Test metadata must provide subject.")
+        effective_topic = (topic_from_test or "").strip() if topic_from_test else None
+        if not effective_topic and topics_from_test:
+            effective_topic = next((str(t).strip() for t in topics_from_test if t and str(t).strip()), None)
+        if not effective_topic:
+            raise ValueError(
+                "Study guide requires topic_from_test or non-empty topics_from_test. "
+                "Tests must be created with subject+topics so metadata.topics is set."
+            )
+        
         # Get concept information if available
         concept_info = None
         concepts = await self.concept_repo.get_all_concepts()
@@ -105,6 +174,11 @@ class StudyGuideService:
             if concept['name'].lower() == concept_name.lower():
                 concept_info = concept
                 break
+        
+        # Load child context for cultural/context flexibility (language, tone, examples, etc.)
+        child_ctx = await get_child_context(child_id=child_id, language_override=language)
+        output_language = (child_ctx.get("language") or "English").strip() or "English"
+        cultural_block = child_ctx.get("prompt_block") or ""
         
         # Build prompt for study guide generation
         prompt = self._build_study_guide_prompt(
@@ -115,16 +189,21 @@ class StudyGuideService:
             concept_info=concept_info,
             common_errors=common_errors or [],
             misconceptions=misconceptions or [],
-            sample_questions=sample_questions or []
+            sample_questions=sample_questions or [],
+            topic_from_test=topic_from_test,
+            topics_from_test=topics_from_test or [],
         )
         
-        output_language = (language or "English").strip() or "English"
         system_prompt = f"""
         You are an expert educational tutor. Your task is to generate a DETAILED, COMPREHENSIVE study guide in Markdown. 
 Because this is for the Zoria Learning System, you must use specific structural patterns that our frontend will transform into interactive "Knowledge Blocks."
 
-## 0. OUTPUT LANGUAGE
+## 0. OUTPUT LANGUAGE AND PREFERENCES
 Generate the ENTIRE study guide in **{output_language}** only: all section titles, explanations, analogies, step-by-step content, examples, pitfall descriptions, cheat sheet text, and mastery check. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
+{f'''
+## 0b. CULTURAL / CONTEXT PREFERENCES
+{cultural_block}
+''' if cultural_block else ''}
 
 ## 1. STRUCTURAL DIRECTIVES
 - **Tone**: Professional, encouraging, and clear (Middle School level).
@@ -175,6 +254,7 @@ Please structure your Markdown using these exact section headers so the UI can s
                 content = response.get('text', '') or response.get('content', '') or str(response)
             else:
                 content = str(response)
+            content = _normalize_study_guide_revision_latex(content) or content
             
             if not content or len(content.strip()) < 50:
                 raise ValueError(f"LLM returned insufficient content: {len(content) if content else 0} characters")
@@ -189,9 +269,12 @@ Please structure your Markdown using these exact section headers so the UI can s
                 'related_concepts': []
             }
             
-            # Generate revision cards using LLM
-            logger.info(f"Generating revision cards for {concept_name}")
-            revision_cards = await self._generate_revision_cards(content, concept_name, language=language)
+            # Topic and subject already validated above (no fallbacks)
+            logger.info(f"Generating revision cards for {concept_name} (subject={subject}, topic={effective_topic})")
+            revision_cards = await self._generate_revision_cards(
+                content, concept_name, language=output_language,
+                subject=subject, topic=effective_topic
+            )
             logger.info(f"Generated {len(revision_cards)} revision cards")
             
             # Save study guide to database
@@ -277,31 +360,52 @@ Please structure your Markdown using these exact section headers so the UI can s
         concept_info: Optional[Dict],
         common_errors: List[str],
         misconceptions: List[str],
-        sample_questions: List[Dict]
+        sample_questions: List[Dict],
+        topic_from_test: Optional[str] = None,
+        topics_from_test: Optional[List[str]] = None,
     ) -> str:
-        """Build prompt for study guide generation."""
-        # Ensure subject matches concept (e.g. biology_General -> biology). Override if caller passed wrong subject.
-        if concept_name and "_" in concept_name:
-            concept_derived_subject = (concept_name.split("_")[0] or "").strip()
-            if concept_derived_subject and (not subject or concept_derived_subject.lower() != (subject or "").lower()):
-                subject = concept_derived_subject
-        elif concept_name and concept_name.strip() and not subject:
-            subject = concept_name.strip()
+        """Build prompt for study guide generation. Requires subject and topic from test (no fallbacks)."""
+        if not subject or not str(subject).strip():
+            raise ValueError("Study guide prompt requires subject.")
+        topic_or_subtopic = (topic_from_test or "").strip() if topic_from_test else None
+        if not topic_or_subtopic and topics_from_test:
+            topic_or_subtopic = next((str(t).strip() for t in topics_from_test if t and str(t).strip()), None)
+        if not topic_or_subtopic:
+            raise ValueError("Study guide prompt requires topic_from_test or non-empty topics_from_test.")
+
+        # Build topics list: from test, then concept name; optional concept_info keywords
+        topics_list = []
+        if topics_from_test:
+            topics_list.extend(t for t in topics_from_test if t and str(t).strip())
+        if concept_name and concept_name not in topics_list:
+            topics_list.insert(0, concept_name)
+        if concept_info:
+            kw = concept_info.get('keywords')
+            if isinstance(kw, list) and kw:
+                topics_list.extend(str(k).strip() for k in kw[:10] if k and str(k).strip())
+            elif isinstance(kw, str) and kw.strip():
+                topics_list.append(kw.strip())
+        if not topics_list:
+            topics_list = [concept_name]
 
         prompt_parts = [
+            "=" * 60,
+            "SUBJECT & TOPICS (use this scope for the entire guide)",
+            "=" * 60,
+            f"Subject: {subject}",
+            f"Primary concept: {concept_name}",
+            f"Topic / Subtopic (from test and incorrect answers): {topic_or_subtopic}",
+            f"Topics to cover: {', '.join(topics_list[:12])}",
+            "",
+            "=" * 60,
             f"Create a comprehensive study guide for: {concept_name}",
-            f"",
+            "",
             f"Focus Area: {focus_area}",
             ""
         ]
         
         if grade_level:
             prompt_parts.append(f"Grade Level: {grade_level}")
-        if subject:
-            prompt_parts.append(f"Subject: {subject}")
-        if concept_info:
-            topic_or_subtopic = (concept_info.get('subtopic') or '').strip() or 'General'
-            prompt_parts.append(f"Topic / Subtopic: {topic_or_subtopic}")
         if concept_info:
             source_markdown = concept_info.get('source_markdown', '')
             if source_markdown:
@@ -361,7 +465,8 @@ Please structure your Markdown using these exact section headers so the UI can s
         if misconceptions:
             prompt_parts.extend([
                 "",
-                "Misconceptions Identified:",
+                "Misconceptions Identified (use these in Section 6; ensure every Fact is correct for",
+                f"Subject: {subject} and Topic: {topic_or_subtopic or concept_name}):",
             ])
             for i, misc in enumerate(misconceptions, 1):
                 prompt_parts.append(f"{i}. {misc}")
@@ -448,6 +553,10 @@ Please structure your Markdown using these exact section headers so the UI can s
     "",
     "## Section 6: Misconceptions Debunked",
     "- Contrast 'Common Sense' (which is often wrong in science) with 'Scientific Fact'.",
+    "- CRITICAL: Every 'Fact' must be scientifically correct for this subject and topic. Do not swap or mix",
+    "  definitions between related terms (e.g. keep each concept's definition accurate; do not assign one",
+    "  term's meaning to another). Verify the Fact contradicts the misconception and is correct.",
+    "- For each item use: **Misconception:** (wrong belief), **Fact:** (correct statement), **Why:** (brief explanation).",
     "- Explain the 'Why' behind the correct understanding.",
     "",
     "## Section 7: Practice Quest (Guided Practice)",
@@ -474,6 +583,8 @@ Please structure your Markdown using these exact section headers so the UI can s
         content: str,
         concept_name: str,
         language: Optional[str] = None,
+        subject: Optional[str] = None,
+        topic: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Generate revision cards from study guide content using LLM.
         
@@ -481,13 +592,28 @@ Please structure your Markdown using these exact section headers so the UI can s
             content: The study guide markdown content
             concept_name: Name of the concept
             language: Language for card text (e.g. 'English', 'Hindi'). None = English.
+            subject: Subject name (e.g. Physics, Biology) for scoping cards.
+            topic: Topic or subtopic name for scoping cards.
             
         Returns:
             List of revision card objects with 'front' and 'back' keys
         """
         output_lang = (language or "English").strip() or "English"
+        scope_line = ""
+        if subject or topic:
+            scope_parts = []
+            if subject:
+                scope_parts.append(f"Subject: {subject}")
+            if topic:
+                scope_parts.append(f"Topic: {topic}")
+            scope_line = "\n".join([f"- {p}" for p in scope_parts]) + "\n\n"
         prompt = f"""
-Extract revision cards from this study guide for {concept_name}. Write ALL card "front" and "back" text in **{output_lang}** only. Keep LaTeX and math unchanged.
+Extract revision cards from this study guide. Write ALL card "front" and "back" text in **{output_lang}** only. Keep LaTeX and math unchanged.
+
+**Context (use this scope for definitions and formulas):**
+Concept: {concept_name}
+{scope_line}
+**Study guide content:**
 
 {content}
 
@@ -500,29 +626,43 @@ Review the provided text and generate:
 ### OUTPUT RULES:
 - If a problem in the text has a calculation error or uses an incorrect formula for the given variables, correct it in the card output.
 - Every card must be self-contained (no "as seen in example 1" references).
-- Use proper LaTeX syntax with single backslashes in JSON: \vec{{F}} = ma, \frac{{1}}{{2}}, \text{{units}}
-- Use actual newlines (\n) to separate steps, NOT escaped backslashes
-- Remove any [LaTeX] markers - just include the actual LaTeX formulas
+- Use actual newlines (\n) to separate steps, NOT escaped backslashes.
+- Remove any [LaTeX] markers - just include the actual LaTeX formulas.
 - CRITICAL: For sample problems, include the COMPLETE problem statement in the "front" field - do NOT truncate with "..." or ellipsis. Include all given values and what is being asked.
 - CRITICAL: Return a JSON ARRAY of cards, starting with [ and ending with ]. Do NOT return a single object.
+
+### LaTeX RULES (cards are rendered with KaTeX):
+- In JSON string values use DOUBLE backslash before every LaTeX command: write \\\\frac, \\\\text, \\\\vec, \\\\Delta (so after JSON parsing the card gets one backslash: \\frac, \\text, etc.). A single backslash in JSON (e.g. \\f) becomes a control character and breaks the formula.
+- KaTeX only supports \\Delta and \\delta for Greek letters; do NOT use \\textDelta or \\textdelta (they will not render).
+- For units inside math use \\\\text{{...}}: e.g. $10 \\\\text{{ m/s}}$ or $v = 5 \\\\text{{ m/s}}$.
+- Close every math block: each $ with $, each $$ with $$, and each \\\\[ with \\\\].
+- Inline math: $...$. Display math: $$...$$ or \\\\[...\\\\].
 
 ### OUTPUT JSON EXAMPLE:
 [
   {{
-    "front": "What is the formula for Kinetic Energy?",
-    "back": "The formula is: $$KE = \\frac{{1}}{{2}}mv^2$$\n\nWhere:\n- $m$ is mass\n- $v$ is velocity"
+    "front": "What is the definition of a Variable?",
+    "back": "A variable represents an unknown value or quantity in a mathematical expression or equation."
   }},
   {{
-    "front": "Sample Problem: A cart starts from rest and accelerates uniformly at 2.0 m/s² for 5 seconds. Find the final velocity and distance traveled.",
-    "back": "Step 1: Identify given values\n\nInitial velocity $u = 0 \\text{{ m/s}}$\nAcceleration $a = 2.0 \\text{{ m/s}}^2$\nTime $t = 5 \\text{{ s}}$\n\n\nStep 2: Apply formula $v = u + at$\n\n\nStep 3: Calculate final velocity\n\n$$v = 0 + (2.0)(5) = 10.0 \\text{{ m/s}}$$\n\n\nStep 4: Calculate distance using $s = ut + \\frac{{1}}{{2}}at^2$\n\n$$s = (0)(5) + \\frac{{1}}{{2}}(2.0)(5)^2 = 25 \\text{{ m}}$$\n\n\nFinal Answer: The final velocity is 10.0 m/s and the distance traveled is 25 m."
+    "front": "Sample Problem: [Insert Full Question from Source Text here, e.g., Solve for x: 3x + 4 = 10]",
+    "back": "Step 1: [First logical step, e.g., Subtract 4 from both sides]\\\\nStep 2: [Second logical step, e.g., Divide by 3 to isolate x]\\\\n\\\\nFinal Answer: [Result, e.g., x = 2]"
   }}
 ]
 """
 
+        scope_instruction = ""
+        if subject or topic:
+            parts = [f"Concept: {concept_name}"]
+            if subject:
+                parts.append(f"Subject: {subject}")
+            if topic:
+                parts.append(f"Topic: {topic}")
+            scope_instruction = f"\n\n## 0b. SCOPE\nCards must stay within this scope: {' | '.join(parts)}. Definitions and formulas should match the subject and topic.\n"
         system_prompt = f"""
 # Role: Expert Educational Content Extractor (Llama 3.1)
 You are a specialist in transforming long-form Study Guides into high-utility active recall Revision Cards.
-
+{scope_instruction}
 ## 0. OUTPUT LANGUAGE
 Generate ALL "front" and "back" text for every card in **{output_lang}** only. Keep LaTeX and math notation unchanged. If the language is a code (en, hi, es), use the full language name (English, Hindi, Spanish).
 
@@ -533,7 +673,7 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
     - Include the COMPLETE problem statement in the "front" field - do NOT truncate with "..."
     - Include every numbered step from the text in the "back" field.
     - **Logic Guardrail**: If the source text suggests a formula that does not match the variables given (e.g., using F=ma when only velocity/time are provided), you must correct the logic to use the mathematically sound formula.
-- **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` is properly closed. Verify syntax like `\\text{{m s}}^{{-1}}`.
+- **Accuracy Check**: Ensure every opened LaTeX bracket `{{` or `$` or `\\[` is properly closed. Use double backslashes in JSON for LaTeX (e.g. `\\\\frac`, `\\\\text`) so formulas parse correctly.
 
 ## 2. FORMATTING & JSON SAFETY (CRITICAL)
 - **JSON Structure**: Output a RAW JSON ARRAY only. 
@@ -541,10 +681,10 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
   - **Do NOT return a single card object** - Always return an array, even if it has only one card.
   - Do NOT wrap the array in a "cards" key. 
   - Do NOT include markdown code blocks (```json).
-- **LaTeX Syntax**: Use single backslashes in JSON output (e.g., `\frac`, `\vec`, `\text`). The JSON parser will handle escaping.
-- **Newlines**: Use actual newline characters `\n` (not escaped backslashes) to separate steps in the "back" field.
-- **Step Formatting**: For step-by-step solutions, use DOUBLE newlines (`\n\n`) between each numbered step (Step 1, Step 2, etc.) to ensure clear visual separation.
-- **Line Breaks**: Each step should be on its own line, with a blank line between steps for readability.
+- **LaTeX in JSON**: In JSON string values, backslashes must be escaped. Write `\\\\frac`, `\\\\text`, `\\\\vec`, `\\\\Delta` (double backslash) so that after JSON parsing the card text contains single backslashes (e.g. \\frac). Using a single backslash in JSON (e.g. \\f) can be interpreted as a control character and break the formula.
+- **KaTeX compatibility**: Use \\Delta and \\delta for Greek letters (not \\textDelta or \\textdelta). Use \\text{{...}} for units inside math (e.g. \\text{{ m/s}}). Close every $ with $ and every \\[ with \\].
+- **Newlines**: Use actual newline characters `\\n` in the JSON string to separate steps in the "back" field.
+- **Step Formatting**: For step-by-step solutions, use DOUBLE newlines between each numbered step (Step 1, Step 2, etc.) for clear visual separation.
 - **Clean Output**: Remove any [LaTeX] markers or placeholder text - include only actual LaTeX formulas.
 
 ## 3. CONTENT DENSITY
@@ -609,72 +749,18 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
             
             logger.info(f"Extracted {len(cards)} cards from LLM response")
             
-            # Validate and clean cards
-            import re
+            # Validate and clean cards (LaTeX: single pipeline in normalize_revision_card_latex)
             valid_cards = []
             for idx, card in enumerate(cards):
                 if isinstance(card, dict) and 'front' in card and 'back' in card:
-                    # Ensure front and back are strings
-                    # Use repr to preserve escape sequences, then decode
                     front_raw = card.get('front', '')
                     back_raw = card.get('back', '')
-                    
-                    # Convert to string, handling both string and other types
-                    if isinstance(front_raw, str):
-                        front = front_raw
-                    else:
-                        front = str(front_raw)
-                    
-                    if isinstance(back_raw, str):
-                        back = back_raw
-                    else:
-                        back = str(back_raw)
-                    
-                    # Fix LaTeX commands that lost their backslashes due to Python escape sequence interpretation
-                    # When JSON contains "\frac", Python's json.loads interprets \f as form feed (\x0c)
-                    # So "\frac" becomes form feed character + "rac"
-                    
-                    # First, fix form feed characters that should be \frac
-                    # Pattern: form feed followed by "rac" -> "\frac"
-                    front = re.sub(r'\x0crac', r'\\frac', front)
-                    back = re.sub(r'\x0crac', r'\\frac', back)
-                    
-                    # Also fix form feed followed by any LaTeX-like pattern (in case of other commands)
-                    # Pattern: form feed + letter sequence that looks like LaTeX command
-                    # Match form feed followed by lowercase letters (LaTeX commands are lowercase)
-                    front = re.sub(r'\x0c([a-z]+)', r'\\\1', front)  # form feed + command -> \command
-                    back = re.sub(r'\x0c([a-z]+)', r'\\\1', back)
-                    
-                    # Fix any remaining form feed characters - they're likely from \f in JSON
-                    # Remove standalone form feeds (not followed by a letter that could be a command)
-                    front = re.sub(r'\x0c(?!\w)', '', front)  # Remove form feed if not followed by word char
-                    back = re.sub(r'\x0c(?!\w)', '', back)
-                    
-                    # Also check for form feed in the middle of text (like "KE = \x0c\frac")
-                    # Replace form feed + backslash + command with just backslash + command
-                    front = re.sub(r'\x0c\\', r'\\', front)
-                    back = re.sub(r'\x0c\\', r'\\', back)
-                    
-                    # Fix other common LaTeX commands that might have lost backslashes
-                    # Pattern: "rac{" -> "\frac{" (when backslash was lost)
-                    front = re.sub(r'([^\\])rac\{', r'\1\\frac{', front)
-                    back = re.sub(r'([^\\])rac\{', r'\1\\frac{', back)
-                    front = re.sub(r'^rac\{', r'\\frac{', front)
-                    back = re.sub(r'^rac\{', r'\\frac{', back)
-                    
-                    # Fix "ext{" -> "\text{" (when backslash was lost)
-                    front = re.sub(r'([^\\])ext\{', r'\1\\text{', front)
-                    back = re.sub(r'([^\\])ext\{', r'\1\\text{', back)
-                    front = re.sub(r'^ext\{', r'\\text{', front)
-                    back = re.sub(r'^ext\{', r'\\text{', back)
-                    
-                    # Normalize LaTeX: fix double backslashes and escaped newlines
-                    # Replace \\\\ with \\ (for over-escaped backslashes)
-                    # But be careful - we want to preserve actual double backslashes that are needed
-                    # Only normalize if we have 4+ consecutive backslashes
-                    front = re.sub(r'\\\\{3,}', r'\\\\', front)
-                    back = re.sub(r'\\\\{3,}', r'\\\\', back)
-                    
+                    front = front_raw if isinstance(front_raw, str) else str(front_raw)
+                    back = back_raw if isinstance(back_raw, str) else str(back_raw)
+
+                    front = normalize_revision_card_latex(front)
+                    back = normalize_revision_card_latex(back)
+
                     # Replace literal \n strings with actual newlines (if they're escaped as \\n)
                     back = back.replace('\\n', '\n')
                     front = front.replace('\\n', '\n')
@@ -886,15 +972,16 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
                     try:
                         guide_dict['metadata'] = json.loads(guide_dict['metadata'])
                         logger.debug(f"Parsed metadata string, revision_cards present: {'revision_cards' in guide_dict['metadata']}")
-                        if 'revision_cards' in guide_dict['metadata']:
-                            logger.info(f"Found {len(guide_dict['metadata']['revision_cards'])} revision cards in metadata")
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"Failed to parse metadata JSON: {e}")
                         guide_dict['metadata'] = {}
-                elif isinstance(guide_dict['metadata'], dict):
-                    logger.debug(f"Metadata is already dict, revision_cards present: {'revision_cards' in guide_dict['metadata']}")
-                    if 'revision_cards' in guide_dict['metadata']:
-                        logger.info(f"Found {len(guide_dict['metadata']['revision_cards'])} revision cards in metadata")
+                if isinstance(guide_dict.get('metadata'), dict) and 'revision_cards' in guide_dict['metadata']:
+                    cards = guide_dict['metadata']['revision_cards']
+                    logger.info(f"Found {len(cards)} revision cards in metadata; normalizing LaTeX for display")
+                    for c in cards:
+                        if isinstance(c, dict) and 'front' in c and 'back' in c:
+                            c['front'] = normalize_revision_card_latex(c.get('front') or '')
+                            c['back'] = normalize_revision_card_latex(c.get('back') or '')
             else:
                 logger.debug("No metadata found in guide")
             return guide_dict
