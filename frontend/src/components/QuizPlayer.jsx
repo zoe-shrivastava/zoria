@@ -26,7 +26,12 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
   const [showHints, setShowHints] = useState({}) // { questionId: bool }
   // State to track if graphs/diagrams are currently rendering
   const [isGraphRendering, setIsGraphRendering] = useState(false)
-  
+  const isGraphRenderingRef = useRef(false)
+  const diagramLoadingSeenRef = useRef(false)
+  useEffect(() => {
+    isGraphRenderingRef.current = isGraphRendering
+  }, [isGraphRendering])
+
   // Behavioral tracking state per question
   const [behavioralData, setBehavioralData] = useState({}) // { questionId: { edit_count, hints_accessed, latency_ms, idle_time_ms, confidence_score, question_start_time, last_activity_time, navigation_actions } }
   const [confidenceScores, setConfidenceScores] = useState({}) // { questionId: 1-5 }
@@ -55,33 +60,36 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     loadTest()
   }, [testId])
 
+  // Countdown timer: only run when not waiting for diagram/graph to render (pause by not running interval)
   useEffect(() => {
-    if (test && test.time_limit_minutes && started && !readOnly) {
-      const totalSeconds = test.time_limit_minutes * 60
-      let initialRemaining = totalSeconds
-      if (test.started_at) {
-        const startedAtMs = parseStartedAt(test.started_at)
-        if (!isNaN(startedAtMs)) {
-          const elapsedSeconds = Math.floor((Date.now() - startedAtMs) / 1000)
-          initialRemaining = Math.max(0, totalSeconds - Math.max(0, elapsedSeconds))
-        }
+    if (!test || !test.time_limit_minutes || !started || readOnly) return
+    if (isGraphRendering) return // pause: clear interval and do not decrement until rendering done
+
+    const totalSeconds = test.time_limit_minutes * 60
+    let initialRemaining = totalSeconds
+    if (test.started_at) {
+      const startedAtMs = parseStartedAt(test.started_at)
+      if (!isNaN(startedAtMs)) {
+        const elapsedSeconds = Math.floor((Date.now() - startedAtMs) / 1000)
+        initialRemaining = Math.max(0, totalSeconds - Math.max(0, elapsedSeconds))
       }
-      setTimeRemaining(initialRemaining)
-
-      const interval = setInterval(() => {
-        setTimeRemaining((prev) => {
-          if (prev <= 1) {
-            clearInterval(interval)
-            handleSubmit()
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-
-      return () => clearInterval(interval)
     }
-  }, [test, started, readOnly])
+    // Set initial only when we don't have a value yet (so resume from diagram pause keeps current time)
+    setTimeRemaining((prev) => (prev != null ? prev : initialRemaining))
+
+    const interval = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval)
+          handleSubmit()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [test, started, readOnly, isGraphRendering])
 
   // Elapsed timer: set start time when test starts (or restore from test.started_at on resume)
   useEffect(() => {
@@ -114,36 +122,54 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
 
   // Monitor for graph/diagram rendering status
   useEffect(() => {
+    diagramLoadingSeenRef.current = false
+
+    const questions = test?.questions || []
+    const currentQuestion = questions[currentQuestionIndex]
+    const hasDiagramContent = currentQuestion && (
+      currentQuestion.metadata?.diagram_code ||
+      currentQuestion.metadata?.needs_diagram === true ||
+      currentQuestion.metadata?.needs_graph === true ||
+      (typeof currentQuestion.text === 'string' && (
+        currentQuestion.text.includes('tikzpicture') ||
+        currentQuestion.text.includes('text/tikz') ||
+        currentQuestion.text.includes('Diagram (LaTeX)')
+      ))
+    )
+
+    // When landing on a question that has diagram/graph, assume rendering so the quiz timer
+    // pauses immediately; only unpause once we've seen loading in the DOM and it's gone
+    if (hasDiagramContent) {
+      setIsGraphRendering(true)
+    }
+
     const checkRenderingStatus = () => {
-      // Check for loading indicators in the DOM
       const loadingElements = document.querySelectorAll('.tikz-loading')
       const hasLoading = loadingElements.length > 0
-      
-      // Also check for containers with _isRendering flag
+
       const tikzContainers = document.querySelectorAll('.tikz-diagram')
       let hasRenderingFlag = false
       tikzContainers.forEach(container => {
-        if (container._isRendering) {
-          hasRenderingFlag = true
-        }
+        if (container._isRendering) hasRenderingFlag = true
       })
-      
-      const isRendering = hasLoading || hasRenderingFlag
-      setIsGraphRendering(isRendering)
+
+      const stillRendering = hasLoading || hasRenderingFlag
+      if (stillRendering) diagramLoadingSeenRef.current = true
+
+      setIsGraphRendering(prev => {
+        if (!stillRendering) {
+          // Only allow clearing to false if: no diagram on this question, or we've seen loading and it's done
+          if (!hasDiagramContent || diagramLoadingSeenRef.current) return false
+          return prev
+        }
+        return true
+      })
     }
 
-    // Check immediately
     checkRenderingStatus()
+    const interval = setInterval(checkRenderingStatus, 250)
 
-    // Set up interval to check periodically
-    const interval = setInterval(checkRenderingStatus, 500) // Check every 500ms
-
-    // Also use MutationObserver for more immediate updates
-    const observer = new MutationObserver(() => {
-      checkRenderingStatus()
-    })
-
-    // Observe the document body for changes
+    const observer = new MutationObserver(() => checkRenderingStatus())
     observer.observe(document.body, {
       childList: true,
       subtree: true,
@@ -155,7 +181,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       clearInterval(interval)
       observer.disconnect()
     }
-  }, [currentQuestionIndex]) // Re-run when question changes
+  }, [currentQuestionIndex, test?.questions])
 
   // When graph/diagram finishes rendering, start the question timer (question_start_time)
   useEffect(() => {

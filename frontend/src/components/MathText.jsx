@@ -300,7 +300,33 @@ export default function MathText({ text, inline = false }) {
       
       // Normalize the entire text first so content outside $...$ (e.g. " 	ext{Dollar}") is also fixed
       processedText = normalizeLaTeXEscaping(processedText)
-      
+
+      // Use \[...\] for \begin{align*} etc. so KaTeX always gets display mode ($$ can be parsed as two $ and force inline)
+      const envNames = ['align*', 'align', 'equation*', 'equation', 'gather*', 'gather', 'aligned', 'eqnarray*', 'eqnarray']
+      const wrapBeginEnd = (str) => {
+        let out = str
+        envNames.forEach((env) => {
+          const esc = env.replace('*', '\\*')
+          const beginPat = new RegExp(`\\\\begin\\{${esc}\\}([\\s\\S]*?)\\\\end\\{${esc}\\}`, 'g')
+          out = out.replace(beginPat, (_, content) => `\\[\\begin{${env}}${content}\\end{${env}}\\]`)
+        })
+        return out
+      }
+      // Convert $$...\begin{env}...\end{env}...$$ to \[...\] so display mode is unambiguous
+      envNames.forEach((env) => {
+        const esc = env.replace('*', '\\*')
+        processedText = processedText.replace(
+          new RegExp(`\\$\\$\\s*\\\\begin\\{${esc}\\}([\\s\\S]*?)\\\\end\\{${esc}\\}\\s*\\$\\$`, 'g'),
+          (_, content) => `\\[\\begin{${env}}${content}\\end{${env}}\\]`
+        )
+      })
+      const parts = processedText.split(/\$\$/g)
+      if (parts.length > 1) {
+        processedText = parts.map((part, i) => (i % 2 === 0 ? wrapBeginEnd(part) : part)).join('$$')
+      } else {
+        processedText = wrapBeginEnd(processedText)
+      }
+
       // Merge "$...$ \text{...}" into "$... \text{...}$" so \text{} is inside math mode and KaTeX renders it
       processedText = processedText.replace(/\$([^$]+)\$\s*\\text\{([^}]+)\}/g, (_, math, textContent) => `$${math} \\text{${textContent}}$`)
       
