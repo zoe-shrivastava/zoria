@@ -196,7 +196,7 @@ class StudyGuideService:
         
         system_prompt = f"""
         You are an expert educational tutor. Your task is to generate a DETAILED, COMPREHENSIVE study guide in Markdown. 
-Because this is for the Zoria Learning System, you must use specific structural patterns that our frontend will transform into interactive "Knowledge Blocks."
+Follow the REQUIRED CONTENT STRUCTURE (Section 1 through Section 8) given in the user message exactly so the guide renders correctly.
 
 ## 0. OUTPUT LANGUAGE AND PREFERENCES
 Generate the ENTIRE study guide in **{output_language}** only: all section titles, explanations, analogies, step-by-step content, examples, pitfall descriptions, cheat sheet text, and mastery check. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
@@ -210,31 +210,13 @@ Generate the ENTIRE study guide in **{output_language}** only: all section title
 - **LaTeX**: Use double-backslashes for all math (e.g., `\\vec{{F}} = ma`). Write display math as $$...$$ and inline math as $...$ directly in the paragraph—do NOT wrap them in ```latex or ``` code blocks, or the UI will not render the math.
 - **Formatting**: Use Bold for key terms and Blockquotes for "Missions."
 
-## 2. ZORIA COMPONENT MAPPING
-Please structure your Markdown using these exact section headers so the UI can style them:
+## 2. CONTENT STRUCTURE (MUST FOLLOW)
+You MUST use the exact "REQUIRED CONTENT STRUCTURE" (Section 1 through Section 8) provided in the user message below. Do NOT use alternate section titles such as "Concept Snapshot", "Zoria Analogy", "Your Quest Map", or "Zoria's Lab". In Section 1 (Concept Foundation) only:
+- Include exactly one relatable analogy to define the concept (e.g., explaining inertia with a skateboard). Do NOT add a separate subsection or heading called "Zoria Analogy"; the analogy belongs in Section 1.
+- Include exactly one "Why" explanation (how this makes the world work / real-world context). Do not repeat the same idea in multiple places.
 
-### Concept Snapshot: [Topic Name]
-- Provide a clear definition and why it matters. 
-- Use a **"Zoria Analogy"** to explain the concept (e.g., "Imagine force like a push on a swing...").
-
-### Your Quest Map (Step-by-Step)
-- Use a numbered list to show the 1-2-3 approach to solving problems. 
-- Include a "Why?" after each step.
-
-### Zoria's Lab (Worked Examples)
-- Start with a "Level 1: Basic" example.
-- Move to a "Level 2: Complex" example.
-- Include a "Variation" or "Edge Case" to challenge the student.
-
-### Pitfall Patrol (Common Mistakes)
-- Address the student's specific errors (e.g., "No Answer" or "Incorrect Formula").
-- Explain the "Trap" and show the "Escape Route" (the correct way).
-
-### The Cheat Sheet (Quick Reference)
-- Provide a Markdown table of formulas, units, and constants.
-
-### 🎯 Mastery Check
-- List 3 signs that the student has mastered the concept.
+## 3. DEFINITIONS (CORE CONCEPT)
+All definitions in the study guide must be correct for the stated Subject (e.g. Physics, Mathematics, Biology). Use standard, curriculum-appropriate definitions for that discipline. Do not swap or mix definitions between related terms (e.g. speed vs velocity, force vs pressure). If the user message provides "Concept Information" from the learning material, use it to anchor the core concept definition.
 """
         
         # Generate study guide using LLM
@@ -397,6 +379,8 @@ Please structure your Markdown using these exact section headers so the UI can s
             f"Topic / Subtopic (from test and incorrect answers): {topic_or_subtopic}",
             f"Topics to cover: {', '.join(topics_list[:12])}",
             "",
+            "DEFINITIONS RULE: Every definition in this guide (especially in Section 1 and Section 2) MUST be correct for the stated Subject. Use standard, curriculum-appropriate definitions for that discipline (e.g. in Physics: speed = scalar magnitude of rate of change of distance; velocity = vector with magnitude and direction; in Mathematics: use precise mathematical definitions). Do NOT swap or mix definitions between related terms (e.g. speed vs velocity, force vs pressure). If Concept Information is provided below, align the core concept definition with it.",
+            "",
             "=" * 60,
             f"Create a comprehensive study guide for: {concept_name}",
             "",
@@ -411,9 +395,13 @@ Please structure your Markdown using these exact section headers so the UI can s
             if source_markdown:
                 prompt_parts.extend([
                     "",
-                    "Concept Information:",
+                    "=" * 60,
+                    "CONCEPT INFORMATION (from learning material — use for accurate definitions)",
+                    "=" * 60,
                     f"Name: {concept_info.get('name', '')}",
-                    f"Description: {source_markdown[:500]}",
+                    f"Description: {source_markdown[:1200]}",
+                    "",
+                    "Use the above description to anchor the core concept definition in Section 1 and Section 2 so definitions match the subject and the learning material.",
                 ])
         
         if common_errors:
@@ -528,11 +516,12 @@ Please structure your Markdown using these exact section headers so the UI can s
     "### REQUIRED CONTENT STRUCTURE:",
     "",
     "## Section 1: Concept Foundation",
-    "- Define the concept using a relatable middle-school analogy (e.g., explaining 'Inertia' using a skateboard).",
-    "- Explain the 'Why': How does this make the world work? (Real-world context).",
+    "- Give a correct, subject-specific definition of the concept (and any core terms) as used in the stated Subject. Do not use definitions from another discipline or mix up related terms.",
+    "- Define the concept using exactly ONE relatable middle-school analogy (e.g., explaining 'Inertia' using a skateboard). Do NOT add a separate heading or block called 'Zoria Analogy'—the analogy is part of Section 1.",
+    "- In the same section, explain the 'Why' in one place: How does this make the world work? (Real-world context). Do not repeat the same 'Why' elsewhere.",
     "",
     "## Section 2: Core Principles & Formulas",
-    "- Break down the theory into 'Bite-Sized' principles.",
+    "- Break down the theory into 'Bite-Sized' principles. Use subject-correct definitions for every term and formula (e.g. for Physics: correct units, vector vs scalar; for Mathematics: precise notation and domain).",
     "- Formulas: Provide the formula, then a bulleted list 'Legend' explaining every variable.",
     "- Use display math ($$) for the primary equations so they stand out visually.",
     "",

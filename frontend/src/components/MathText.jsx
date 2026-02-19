@@ -250,6 +250,9 @@ export default function MathText({ text, inline = false }) {
         normalized = normalized.replace(/([=\(\[\{,\s])\u000C([\d\{])/g, '$1\\frac{$2}')
         normalized = normalized.replace(/\u000C(?!\w)/g, '')
         
+        // CRITICAL: Fix backslash-space before frac (e.g. " \ frac" or "\ frac" from storage/API)
+        normalized = normalized.replace(/\\\s+frac/g, '\\frac')
+
         // CRITICAL: Fix \t (tab) characters that appear in \text{...}
         // Pattern: \t followed by ext{ -> \text{ (without backslash before ext)
         normalized = normalized.replace(/\\t(ext\{)/g, '\\text{')
@@ -363,7 +366,14 @@ export default function MathText({ text, inline = false }) {
         dollarIndex++
         return placeholder
       })
-      
+
+      // Wrap standalone \text{...} in gaps (e.g. quiz expected answer "Unit: \text{m/s}") so KaTeX renders them
+      protectedText = protectedText.replace(/\\text\{([^}]*)\}/g, (_, content) => `$\\text{${content}}$`)
+
+      // Wrap standalone \frac{...}{...} (e.g. completed test expected answer or solution steps) so KaTeX renders them
+      // Handles one level of nesting in numerator/denominator (e.g. \frac{\sqrt{x}}{2})
+      protectedText = protectedText.replace(/\\frac\s*\{([^{}]|\{[^{}]*\})*\}\s*\{([^{}]|\{[^{}]*\})*\}/g, (m) => `$${m}$`)
+
       // Restore all expressions (LLM handles currency formatting correctly)
       let finalText = protectedText
       allDollarExpressions.forEach(({ placeholder, original }) => {
