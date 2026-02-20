@@ -16,6 +16,7 @@ import { showNotification } from '../utils/notifications'
 // Language options for child portal (later can be driven by profile preferences)
 const CHILD_LANGUAGE_OPTIONS = [
   { value: 'English', label: 'English' },
+  { value: 'French', label: 'French' },
   { value: 'Hindi', label: 'Hindi' },
   { value: 'Spanish', label: 'Spanish' },
 ]
@@ -46,16 +47,10 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
   const [viewingReport, setViewingReport] = useState(false)
   const [reportChildId, setReportChildId] = useState(null)
 
-  // Language options for child: at most 2 — English + user's default (from profile)
+  // Language options: parent view gets full list; child gets full list (selection is session-only, does not update profile)
   const childLanguageOptions = useMemo(() => {
-    if (!isChild) return CHILD_LANGUAGE_OPTIONS
-    const fromProfile = childProfile?.preferred_language
-    const options = [{ value: 'English', label: 'English' }]
-    if (fromProfile && fromProfile !== 'English') {
-      options.push({ value: fromProfile, label: fromProfile })
-    }
-    return options
-  }, [isChild, childProfile?.preferred_language])
+    return CHILD_LANGUAGE_OPTIONS
+  }, [])
 
   useEffect(() => {
     if (isParent || isAdmin) {
@@ -222,7 +217,12 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
     loadChildren()
   }
 
-  const handleChildUpdated = () => {
+  const handleChildUpdated = (updatedChild) => {
+    if (updatedChild && updatedChild.id) {
+      setChildList((prev) =>
+        prev.map((c) => (c.id === updatedChild.id ? { ...c, ...updatedChild } : c))
+      )
+    }
     setEditingChild(null)
     loadChildren()
   }
@@ -561,20 +561,12 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
 
   // Child dashboard with profile and documents
   if (isChild) {
-    const handleChildLanguageChange = async (value) => {
+    // Child language dropdown is session-only: do NOT update profile (parent sets profile language).
+    const handleChildLanguageChange = (value) => {
       setChildPreferredLanguage(value)
       try {
         window.localStorage.setItem(CHILD_LANGUAGE_STORAGE_KEY, value)
       } catch (_) {}
-      try {
-        const updated = await child.updateProfile({ preferred_language: value || undefined })
-        if (updated) {
-          setChildProfile(updated)
-          setChildPreferredLanguage(updated.preferred_language ?? value)
-        }
-      } catch (e) {
-        if (!isAuthError(e)) showNotification('Language saved locally; could not update profile.', 'info')
-      }
     }
 
     if (loading) {

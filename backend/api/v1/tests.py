@@ -1594,7 +1594,10 @@ async def chat_with_coach(
         
         # Effective output language (request override or from child profile)
         output_lang = (language or child_ctx.get("language") or "English").strip() or "English"
-        language_prefix = f"[Respond only in {output_lang}.]\n\n"
+        language_prefix = (
+            f"[Respond only in {output_lang}. "
+            "Use the language's native script (e.g. Devanagari for Hindi, not Roman transliteration; Latin for English/Spanish/French).]\n\n"
+        )
         
         # Prepare messages: add language reminder to every user input so the model respects it
         messages = []
@@ -1680,7 +1683,7 @@ You are a brilliant, supportive tutor. Your goal is to guide students to mastery
 
 ## 0. OUTPUT LANGUAGE AND SCRIPT
 Respond in **{output_lang}** only. All your messages (explanations, questions, hints, navigation suggestions) must be in {output_lang}. Keep LaTeX and math notation unchanged. If the user writes in another language, you may acknowledge briefly but continue in {output_lang}.
-**CRITICAL - Use the native script, not Roman/Latin transliteration:** For Hindi, write in **Devanagari script** (e.g. आपको, समस्या, मदद), NOT in Roman script (e.g. "Aapko", "samasya", "madad"). For Spanish or English, use standard Latin script. Never respond in Hindi using Romanized/English letters—always use Devanagari (हिंदी) when the language is Hindi.
+**CRITICAL - Use the native script, not Roman/Latin transliteration:** For any language that has a native script, use that script. For Hindi, write in **Devanagari script** (e.g. आपको, समस्या, मदद), NOT in Roman script (e.g. "Aapko", "samasya", "madad"). For English, Spanish, or French, use standard Latin script. Never respond in Hindi using Romanized letters—always use Devanagari (हिंदी) when the language is Hindi.
 The output language rule has absolute priority over ALL other text, including the Study Guide language.
 Even if the Study Guide is in English, responses MUST be in {output_lang}. Even if user sends messages in another language, you must respond in {output_lang}.
 ## 0b. PROFILE PREFERENCES (always apply)
@@ -1709,14 +1712,9 @@ You act as the navigator for the Learning Drawer. Use these tags to trigger UI c
 ## 5. STUDY GUIDE CONTEXT
 """
     
-    # Send as much of the full study guide as fits (so the coach can reference any section)
-    AI_COACH_GUIDE_MAX_CHARS = 18000  # Full 8-section guide typically ~15–20k chars; leave room for system + chat
+    # Send the complete study guide so the coach can reference any section
     if guide.get("content"):
-        full_content = guide["content"]
-        if len(full_content) <= AI_COACH_GUIDE_MAX_CHARS:
-            prompt += f"\n[STUDY_GUIDE] (complete):\n{full_content}\n"
-        else:
-            prompt += f"\n[STUDY_GUIDE] (first {AI_COACH_GUIDE_MAX_CHARS} chars of {len(full_content)} total):\n{full_content[:AI_COACH_GUIDE_MAX_CHARS]}\n"
+        prompt += f"\n[STUDY_GUIDE] (complete):\n{guide['content']}\n"
     
     # Add context about errors
     if context.get("relatedError"):

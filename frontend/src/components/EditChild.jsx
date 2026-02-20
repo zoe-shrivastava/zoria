@@ -18,6 +18,7 @@ const EXAMPLE_OPTIONS = [
 const LANGUAGE_OPTIONS = [
   { value: '', label: 'Default' },
   { value: 'English', label: 'English' },
+  { value: 'French', label: 'French' },
   { value: 'Hindi', label: 'Hindi' },
   { value: 'Spanish', label: 'Spanish' },
 ]
@@ -78,10 +79,10 @@ export default function EditChild({ child, onChildUpdated, onCancel }) {
         updateData.pin = pin
       }
       
-      await children.update(child.id, updateData)
+      const updated = await children.update(child.id, updateData)
       showNotification('Child profile updated successfully', 'success')
       if (onChildUpdated) {
-        onChildUpdated()
+        onChildUpdated(updated)
       }
     } catch (error) {
       showNotification(error.message || 'Failed to update child profile', 'error')

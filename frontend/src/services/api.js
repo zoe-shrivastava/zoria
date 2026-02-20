@@ -479,7 +479,7 @@ export const tests = {
  */
 export const child = {
   getProfile: () =>
-    apiRequest('/api/v1/child/profile', { method: 'GET' }),
+    apiRequest('/api/v1/child/profile', { method: 'GET', cache: 'no-store' }),
   updateProfile: (body) =>
     apiRequest('/api/v1/child/profile', {
       method: 'PATCH',

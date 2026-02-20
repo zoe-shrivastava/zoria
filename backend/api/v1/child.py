@@ -1,6 +1,6 @@
 """Child API endpoints."""
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Response
 
 from schemas.user import ChildResponse, ChildProfileUpdate
 from services.user_service import UserService
@@ -10,11 +10,10 @@ router = APIRouter()
 
 
 @router.get("/profile", response_model=ChildResponse)
-async def get_profile(child: dict = Depends(get_current_child)):
-    """Get child's own profile.
-    
-    GET /api/v1/child/profile
-    """
+async def get_profile(response: Response, child: dict = Depends(get_current_child)):
+    """Get child's own profile. Never cached so parent-updated data is always fresh on login."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
     try:
         user_service = UserService()
         child_data = await user_service.get_child(child["child_id"])
