@@ -23,8 +23,11 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   const [containerHeight, setContainerHeight] = useState(null)
   const [expandedSubjects, setExpandedSubjects] = useState({}) // Track which subjects are expanded
   const [showMetadata, setShowMetadata] = useState(false) // Toggle for metadata info
-  const [regeneratingGuideId, setRegeneratingGuideId] = useState(null) // Guide ID being regenerated (show on tile)
+  const [regeneratingGuideIds, setRegeneratingGuideIds] = useState(() => new Set()) // Guide IDs being regenerated (show on each tile)
   const recommendationsCarouselRef = useRef(null)
+
+  const addRegenerating = (id) => setRegeneratingGuideIds(prev => new Set(prev).add(id))
+  const removeRegenerating = (id) => setRegeneratingGuideIds(prev => { const s = new Set(prev); s.delete(id); return s; })
   
   // Use workspace context - always call hook, but handle gracefully if not in workspace
   let workspaceContext = null
@@ -50,26 +53,43 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
     }
   }
 
-  // Helper to regenerate study guide
+  // Helper to regenerate study guide (backend returns 202 and runs regeneration in background)
   const handleRegenerateGuide = async (guideId, e) => {
     e.preventDefault()
     e.stopPropagation()
-    setRegeneratingGuideId(guideId)
+    addRegenerating(guideId)
+    let isAlreadyInProgress = false
     try {
       showNotification('Regenerating study guide...', 'info')
       const result = await tests.regenerateStudyGuide(guideId, preferredLanguage)
-      showNotification('Study guide regenerated successfully', 'success')
-      // Reload the report to get updated study guides
-      await loadReport()
-      // Also reload all guides if showAllGuides is true
-      if (showAllGuides) {
-        await loadAllGuides()
+      // 202 Accepted: regeneration started in background; poll until ready
+      if (result?.guide_id != null && result.guide === undefined) {
+        showNotification('Regeneration started. This may take a few minutes.', 'info')
+        await tests.pollStudyGuideUntilReady(guideId)
+        await loadReport()
+        if (showAllGuides) await loadAllGuides()
+        showNotification('Study guide regenerated successfully', 'success')
+      } else {
+        await loadReport()
+        if (showAllGuides) await loadAllGuides()
+        showNotification('Study guide regenerated successfully', 'success')
       }
     } catch (err) {
       console.error('Failed to regenerate study guide:', err)
-      showNotification(err.message || 'Failed to regenerate study guide', 'error')
+      // 409 = generation already in progress for this focus area; keep button disabled and poll until done
+      isAlreadyInProgress = err.status === 409 || (err.message && String(err.message).includes('already in progress'))
+      showNotification(err.message || 'Failed to regenerate study guide', isAlreadyInProgress ? 'info' : 'error')
+      if (isAlreadyInProgress) {
+        try {
+          await tests.pollStudyGuideUntilReady(guideId)
+          await loadReport()
+          if (showAllGuides) await loadAllGuides()
+        } finally {
+          removeRegenerating(guideId)
+        }
+      }
     } finally {
-      setRegeneratingGuideId(null)
+      if (!isAlreadyInProgress) removeRegenerating(guideId)
     }
   }
 
@@ -1102,7 +1122,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               }
               
               const guideId = guide.id || link.guide_id
-              const isRegenerating = regeneratingGuideId === guideId
+              const isRegenerating = regeneratingGuideIds.has(guideId)
               return (
                 <div
                   key={isGenerating ? `generating-${link.concept}-${idx}` : guideId}

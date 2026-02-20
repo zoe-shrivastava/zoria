@@ -789,6 +789,7 @@ class EvaluationReportService:
                         common_errors_list.append(error_str)
         common_errors_list = [x for x in common_errors_list if x and x.strip() and x.lower() not in ['none', 'null', '']]
         try:
+            from services.study_guide_service import StudyGuideGenerationInProgressError
             await study_guide_service.generate_study_guide(
                 child_id=child_id,
                 concept_name=area['concept'],
@@ -803,6 +804,8 @@ class EvaluationReportService:
                 topics_from_test=area.get('topics_from_test'),
             )
             logger.info(f"✅ Background: generated study guide for '{area['concept']}'")
+        except StudyGuideGenerationInProgressError:
+            logger.info(f"⏭️ Background: skipping study guide for '{area['concept']}' (generation already in progress for this focus area)")
         except Exception as e:
             logger.error(f"❌ Background: failed study guide for '{area['concept']}': {e}", exc_info=True)
 
@@ -813,7 +816,8 @@ class EvaluationReportService:
         language: Optional[str],
         days_back: int = 30,
     ) -> None:
-        """Generate study guides for focus areas in parallel (called from API background task)."""
+        """Generate study guides for focus areas one at a time (sequential).
+        Revision card generation is heavy; running sequentially avoids overloading the server/Ollama."""
         if not areas_of_focus:
             return
         try:
@@ -831,16 +835,14 @@ class EvaluationReportService:
                 """,
                 child_id, cutoff
             )
-            tasks = [
-                self._generate_one_study_guide(
-                    study_guide_service, child_id, area, grade_level, language, list(tests)
-                )
-                for area in areas_of_focus[:5]
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, r in enumerate(results):
-                if isinstance(r, Exception):
-                    logger.error(f"Background study guide task {i} failed: {r}", exc_info=True)
+            tests_list = list(tests)
+            for area in areas_of_focus[:5]:
+                try:
+                    await self._generate_one_study_guide(
+                        study_guide_service, child_id, area, grade_level, language, tests_list
+                    )
+                except Exception as r:
+                    logger.error(f"Background study guide failed for '{area.get('concept', '')}': {r}", exc_info=True)
             logger.info(f"Background study guide generation completed for {len(areas_of_focus[:5])} areas")
         except Exception as e:
             logger.error(f"Error in generate_study_guides_background: {e}", exc_info=True)

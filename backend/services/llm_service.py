@@ -11,6 +11,9 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
+# Ollama can be slow for long outputs (e.g. revision cards, long sections). Use 5 min to avoid mid-request timeouts.
+OLLAMA_REQUEST_TIMEOUT = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "300"))
+
 
 class LLMService:
     """Service for LLM text generation.
@@ -305,7 +308,7 @@ class LLMService:
                 async with session.post(
                     f"{self.ollama_base_url}/api/generate",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)
+                    timeout=aiohttp.ClientTimeout(total=OLLAMA_REQUEST_TIMEOUT)
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
@@ -521,7 +524,7 @@ class LLMService:
                 async with session.post(
                     f"{self.ollama_base_url}/api/chat",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)
+                    timeout=aiohttp.ClientTimeout(total=OLLAMA_REQUEST_TIMEOUT)
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()

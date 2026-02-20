@@ -109,7 +109,9 @@ async function apiRequest(endpoint, options = {}) {
       const error = await response.json().catch(() => ({
         message: `HTTP ${response.status}: ${response.statusText}`
       }))
-      throw new Error(error.message || error.detail || 'Request failed')
+      const err = new Error(error.detail || error.message || 'Request failed')
+      err.status = response.status
+      throw err
     }
 
     // Parse response body
@@ -439,6 +441,23 @@ export const tests = {
     return apiRequest(url, {
       method: 'POST',
     })
+  },
+
+  /**
+   * Poll GET study-guides/:id until metadata.regeneration_status is not 'in_progress'.
+   * Use after regenerate returns 202 (regeneration started in background).
+   * @param {string} guideId
+   * @param {{ intervalMs?: number, maxPolls?: number }} options
+   * @returns {Promise<void>}
+   */
+  async pollStudyGuideUntilReady(guideId, { intervalMs = 3000, maxPolls = 100 } = {}) {
+    for (let i = 0; i < maxPolls; i++) {
+      const guide = await apiRequest(`/api/v1/tests/study-guides/${guideId}`, { method: 'GET' })
+      const status = guide?.metadata?.regeneration_status
+      if (status !== 'in_progress') return
+      await new Promise((r) => setTimeout(r, intervalMs))
+    }
+    throw new Error('Study guide regeneration is taking longer than expected. Please refresh the page in a minute.')
   },
 
   listStudyGuides: (childId, conceptName = null) => {

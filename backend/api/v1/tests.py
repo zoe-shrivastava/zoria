@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, Query, BackgroundTasks
+from fastapi.responses import JSONResponse
 from datetime import datetime
 
 from schemas.test import (
@@ -28,6 +29,7 @@ from core.config import settings
 from core.background_tasks import (
     enqueue_test_generation_from_concept,
     enqueue_test_generation_from_topics,
+    enqueue_study_guide_regeneration,
 )
 from core.database import Database
 
@@ -1421,7 +1423,7 @@ async def regenerate_study_guide(
                 detail="Focus area has no topic from test; cannot regenerate study guide. Tests must be created with subject+topics so metadata.topics is set."
             )
         
-        # Regenerate with latest data from evaluation report
+        # Regenerate with latest data from evaluation report (run in background to avoid blocking server)
         child = await db.fetchrow(
             "SELECT grade FROM children WHERE id = $1",
             existing_guide['child_id']
@@ -1446,26 +1448,36 @@ async def regenerate_study_guide(
                 else:
                     common_errors_list.append(str(e))
         
-        regenerated_guide = await study_guide_service.generate_study_guide(
-                child_id=str(existing_guide['child_id']),
-                concept_name=concept_name,
-                focus_area=f"Performance: {matching_area['score_percentage']}%",
-                grade_level=grade_level,
-                subject=subject,
-                common_errors=common_errors_list if common_errors_list else None,
-                misconceptions=matching_area.get('misconceptions', []),
-                sample_questions=matching_area.get('sample_questions', []),
-                force_regenerate=True,  # This will delete old and create new, or update if replace_existing is used
-                language=language,
-                topic_from_test=matching_area.get('topic'),
-                topics_from_test=matching_area.get('topics_from_test'),
+        focus_area_str = f"Performance: {matching_area['score_percentage']}%"
+        from services.study_guide_service import is_study_guide_generation_in_progress_async
+        if await is_study_guide_generation_in_progress_async(
+            str(existing_guide['child_id']), concept_name, focus_area_str
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Study guide generation is already in progress for this focus area. Wait for it to finish, then try again."
             )
-        
-        return {
-            'message': 'Study guide regenerated successfully',
-            'guide': regenerated_guide,
-            'guide_id': regenerated_guide.get('id')  # Return the guide ID (may be same if updated, or new if created)
-        }
+        await enqueue_study_guide_regeneration(
+            guide_id=guide_id,
+            child_id=str(existing_guide['child_id']),
+            concept_name=concept_name,
+            focus_area=focus_area_str,
+            grade_level=grade_level,
+            subject=subject,
+            common_errors=common_errors_list if common_errors_list else None,
+            misconceptions=matching_area.get('misconceptions', []),
+            sample_questions=matching_area.get('sample_questions', []),
+            language=language,
+            topic_from_test=matching_area.get('topic'),
+            topics_from_test=matching_area.get('topics_from_test'),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                'message': 'Study guide regeneration started. This may take several minutes. Poll GET /api/v1/tests/study-guides/{guide_id} until metadata.regeneration_status is not "in_progress".',
+                'guide_id': guide_id,
+            },
+        )
         
     except HTTPException:
         raise

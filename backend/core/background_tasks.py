@@ -376,6 +376,118 @@ async def enqueue_test_generation_from_topics(
     logger.info(f"Enqueued background generation for test {test_id} (subject {subject}, topics {topics})")
 
 
+async def enqueue_study_guide_regeneration(
+    guide_id: str,
+    child_id: str,
+    concept_name: str,
+    focus_area: str,
+    grade_level: Optional[str],
+    subject: str,
+    common_errors: Optional[list],
+    misconceptions: list,
+    sample_questions: list,
+    language: Optional[str] = None,
+    topic_from_test: Optional[str] = None,
+    topics_from_test: Optional[list] = None,
+) -> None:
+    """Enqueue study guide regeneration so the HTTP request returns immediately.
+    Long-running pipeline (outline + 8 sections + revision cards) runs in background.
+    Client should poll GET /study-guides/{guide_id} until metadata.regeneration_status is not 'in_progress'.
+    """
+    async def process_regeneration():
+        from core.database import get_db
+        from services.study_guide_service import StudyGuideService
+
+        db = get_db()
+        try:
+            await db.execute(
+                """
+                UPDATE study_guides
+                SET metadata = jsonb_set(COALESCE(metadata, '{}'), '{regeneration_status}', to_jsonb('in_progress'::text))
+                WHERE id = $1
+                """,
+                guide_id,
+            )
+            logger.info(f"Study guide regeneration started for {guide_id}")
+
+            study_guide_service = StudyGuideService(db)
+            try:
+                await study_guide_service.generate_study_guide(
+                    child_id=child_id,
+                    concept_name=concept_name,
+                    focus_area=focus_area,
+                    grade_level=grade_level,
+                    subject=subject,
+                    common_errors=common_errors,
+                    misconceptions=misconceptions or [],
+                    sample_questions=sample_questions or [],
+                    force_regenerate=True,
+                    language=language,
+                    topic_from_test=topic_from_test,
+                    topics_from_test=topics_from_test,
+                )
+                logger.info(f"Study guide regeneration completed for {guide_id}")
+            except Exception as in_progress_exc:
+                from services.study_guide_service import StudyGuideGenerationInProgressError
+                if isinstance(in_progress_exc, StudyGuideGenerationInProgressError):
+                    logger.info(
+                        "Study guide regeneration skipped for %s: generation already in progress for this focus area",
+                        guide_id,
+                    )
+                    try:
+                        await db.execute(
+                            """
+                            UPDATE study_guides
+                            SET metadata = metadata #- '{regeneration_status}'
+                            WHERE id = $1
+                            """,
+                            guide_id,
+                        )
+                    except Exception as clear_err:
+                        logger.warning("Failed to clear regeneration_status for %s: %s", guide_id, clear_err)
+                    return
+                raise
+        except Exception as e:
+            logger.error(f"Background study guide regeneration failed for {guide_id}: {e}", exc_info=True)
+            try:
+                await db.execute(
+                    """
+                    UPDATE study_guides
+                    SET metadata = metadata #- '{regeneration_status}'
+                    WHERE id = $1
+                    """,
+                    guide_id,
+                )
+            except Exception as clear_err:
+                logger.error(f"Failed to clear regeneration_status for {guide_id}: {clear_err}")
+            raise
+
+    task = asyncio.create_task(process_regeneration())
+    _background_tasks.add(task)
+
+    def remove_task(t):
+        _background_tasks.discard(t)
+
+    task.add_done_callback(remove_task)
+
+    def log_completion(t):
+        try:
+            if t.cancelled():
+                logger.warning(f"Study guide regeneration task for {guide_id} was cancelled")
+            elif t.exception():
+                logger.error(
+                    f"Study guide regeneration task for {guide_id} raised: {t.exception()}",
+                    exc_info=t.exception(),
+                )
+            else:
+                logger.info(f"Study guide regeneration task for {guide_id} completed successfully")
+        except Exception as e:
+            logger.error(f"Error in study guide regeneration completion callback: {e}")
+
+    task.add_done_callback(log_completion)
+    logger.info(f"Enqueued study guide regeneration for {guide_id}")
+
+
 def get_background_tasks() -> set:
     """Get set of active background tasks.
     

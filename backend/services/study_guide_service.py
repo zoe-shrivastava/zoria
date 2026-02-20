@@ -1,10 +1,11 @@
 """Service for generating personalized study guides."""
 
+import asyncio
 import logging
 import re
 import uuid
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from services.llm_service import LLMService
 from database.repositories.concept_repository import ConceptRepository
@@ -12,6 +13,32 @@ from core.database import Database
 from core.child_context import get_child_context
 
 logger = logging.getLogger(__name__)
+
+# Guard: only one study guide generation per (child_id, concept_name, focus_area) at a time
+_study_guide_generation_in_progress: set = set()
+_study_guide_generation_lock = asyncio.Lock()
+
+
+class StudyGuideGenerationInProgressError(Exception):
+    """Raised when generation is already running for the same focus area."""
+    pass
+
+
+def _generation_key(child_id: str, concept_name: str, focus_area: str) -> Tuple[str, str, str]:
+    return (str(child_id).strip(), str(concept_name).strip(), str(focus_area).strip())
+
+
+def is_study_guide_generation_in_progress(child_id: str, concept_name: str, focus_area: str) -> bool:
+    """Return True if a study guide is currently being generated for this focus area (sync, no lock)."""
+    key = _generation_key(child_id, concept_name, focus_area)
+    return key in _study_guide_generation_in_progress
+
+
+async def is_study_guide_generation_in_progress_async(child_id: str, concept_name: str, focus_area: str) -> bool:
+    """Return True if a study guide is currently being generated for this focus area (atomic under lock)."""
+    key = _generation_key(child_id, concept_name, focus_area)
+    async with _study_guide_generation_lock:
+        return key in _study_guide_generation_in_progress
 
 
 def _normalize_study_guide_revision_latex(text: Optional[str]) -> Optional[str]:
@@ -39,12 +66,20 @@ def _normalize_revision_card_latex_one(text: str) -> str:
     out = re.sub(_tf + r"imes", _r(B + "times"), out)
     out = re.sub(_tf + r"rac", _r(B + "frac"), out)
     out = re.sub(_tf + r"oxed", _r(B + "boxed"), out)
+    out = re.sub(_tf + r"dot", _r(B + "cdot"), out)
+    out = re.sub(_tf + r"qrt", _r(B + "sqrt"), out)
+    out = re.sub(_tf + r"elta", _r(B + "delta"), out)
+    out = re.sub(r"(\\[tf])+elta", _r(B + "Delta"), out)  # \Delta (capital)
     out = re.sub(_tf + r"\\\\text", _r(B + "text"), out)
     out = re.sub(_tf + r"\\\\frac", _r(B + "frac"), out)
     out = re.sub(r"(\\[tf])+ext", _r(B + "text"), out)
     out = re.sub(r"(\\[tf])+imes", _r(B + "times"), out)
     out = re.sub(r"(\\[tf])+rac", _r(B + "frac"), out)
     out = re.sub(r"(\\[tf])+oxed", _r(B + "boxed"), out)
+    out = re.sub(r"(\\[tf])+dot", _r(B + "cdot"), out)
+    out = re.sub(r"(\\[tf])+qrt", _r(B + "sqrt"), out)
+    out = re.sub(r"(\\[tf])+elta", _r(B + "delta"), out)
+    out = re.sub(r"(\\[tf])+Delta", _r(B + "Delta"), out)
     out = re.sub(r"(\\[tf])+\\text", _r(B + "text"), out)
     out = re.sub(r"(\\[tf])+\\frac", _r(B + "frac"), out)
     _cc = r"[\x08\x09\x0c]+\s*"
@@ -70,13 +105,22 @@ def _normalize_revision_card_latex_one(text: str) -> str:
         if g == "ext": return B + "text"
         if g == "imes": return B + "times"
         if g == "oxed": return B + "boxed"
+        if g == "dot": return B + "cdot"
+        if g == "qrt": return B + "sqrt"
+        if g == "elta": return B + "delta"
+        return B + g
+    def _backslash_cmd_cap(m):
+        g = m.group(1)
+        if g == "Delta": return B + "Delta"
         return B + g
     out = re.sub(r"\x0c([a-z]+)", _backslash_cmd, out)
+    out = re.sub(r"\x0c(Delta)", _backslash_cmd_cap, out)
     out = re.sub(r"\x0c(?!\w)", "", out)
     out = re.sub(r"\x0c\\", lambda m: B, out)
     out = out.replace("\\textDelta", B + "Delta")
     out = out.replace("\\textdelta", B + "delta")
-    out = re.sub(r"\\\[([\s\S]*?)\](?=\s*(\n|$))", B + r"[\1" + B + "]", out)
+    # Normalize \[ ... \] display math (allow \] followed by newline, end, or punctuation like . or ,)
+    out = re.sub(r"\\\[([\s\S]*?)\](?=\s*(\n|$|[.,;:)]))", B + r"[\1" + B + "]", out)
     while "\\\\" in out:
         out = out.replace("\\\\", B)  # B is single char, no re.sub
     out = re.sub(r"([^\\])rac\{", lambda m: m.group(1) + B + "frac{", out)
@@ -84,6 +128,15 @@ def _normalize_revision_card_latex_one(text: str) -> str:
     out = re.sub(r"([^\\])ext\{", lambda m: m.group(1) + B + "text{", out)
     out = re.sub(r"^ext\{", _r(B + "text{"), out)
     out = re.sub(r"\$1\\text\{", _r("$" + B + "text{"), out)
+    # Lost backslash before common commands (LLM/JSON: \c dot, \s qrt, \D elta, etc.)
+    out = re.sub(r"([^\\])dot\b", lambda m: m.group(1) + B + "cdot", out)
+    out = re.sub(r"^dot\b", _r(B + "cdot"), out)
+    out = re.sub(r"([^\\])qrt\{", lambda m: m.group(1) + B + "sqrt{", out)
+    out = re.sub(r"^qrt\{", _r(B + "sqrt{"), out)
+    out = re.sub(r"([^\\])elta\b", lambda m: m.group(1) + B + "delta", out)
+    out = re.sub(r"^elta\b", _r(B + "delta"), out)
+    out = re.sub(r"([^\\])Delta\b", lambda m: m.group(1) + B + "Delta", out)
+    out = re.sub(r"^Delta\b", _r(B + "Delta"), out)
     out = out.replace("\\frac\\frac", B + "frac")
     out = re.sub(r"\\f\\frac", _r(B + "frac"), out)
     out = re.sub(r"\\fracrac\{?", _r(B + "frac{"), out)
@@ -146,13 +199,18 @@ class StudyGuideService:
         """
         self.db = db
         self.concept_repo = ConceptRepository(db)
+        self._llm_service: Optional[LLMService] = None
 
-        # Initialize LLM service with llama3.1
-        self.llm_service = LLMService(
-            model_name="llama3.1",
-            enable_logging=True,
-            context_source="study_guide_generation"
-        )
+    @property
+    def llm_service(self) -> LLMService:
+        """Lazy-initialize LLM service so GET study-guide (and polling) does not create it."""
+        if self._llm_service is None:
+            self._llm_service = LLMService(
+                model_name="llama3.1",
+                enable_logging=True,
+                context_source="study_guide_generation"
+            )
+        return self._llm_service
 
     def _build_context_block(self, normalized: Dict[str, Any]) -> str:
         """Build the dynamic context block injected into the master system prompt."""
@@ -672,6 +730,54 @@ Remember: Reply with the COMPLETE document above, with only minor tone/clarity i
                 "Tests must be created with subject+topics so metadata.topics is set."
             )
         
+        # Only one generation per (child_id, concept_name, focus_area) at a time
+        key = _generation_key(child_id, concept_name, focus_area)
+        async with _study_guide_generation_lock:
+            if key in _study_guide_generation_in_progress:
+                raise StudyGuideGenerationInProgressError(
+                    "Study guide generation is already in progress for this focus area. "
+                    "Wait for it to finish or try again shortly."
+                )
+            _study_guide_generation_in_progress.add(key)
+        try:
+            return await self._generate_study_guide_impl(
+                child_id=child_id,
+                concept_name=concept_name,
+                focus_area=focus_area,
+                test_id=test_id,
+                grade_level=grade_level,
+                subject=subject,
+                common_errors=common_errors,
+                misconceptions=misconceptions,
+                sample_questions=sample_questions,
+                force_regenerate=force_regenerate,
+                language=language,
+                topic_from_test=topic_from_test,
+                topics_from_test=topics_from_test,
+                effective_topic=effective_topic,
+            )
+        finally:
+            async with _study_guide_generation_lock:
+                _study_guide_generation_in_progress.discard(key)
+
+    async def _generate_study_guide_impl(
+        self,
+        child_id: str,
+        concept_name: str,
+        focus_area: str,
+        test_id: Optional[str],
+        grade_level: Optional[str],
+        subject: str,
+        common_errors: Optional[List[str]],
+        misconceptions: Optional[List],
+        sample_questions: Optional[List],
+        force_regenerate: bool,
+        language: Optional[str],
+        topic_from_test: Optional[str],
+        topics_from_test: Optional[List[str]],
+        effective_topic: Optional[str],
+    ) -> Dict[str, Any]:
+        """Implementation: build concept_info, normalized, pipeline, cards, save. Caller holds generation lock."""
         # Get concept information if available
         concept_info = None
         concepts = await self.concept_repo.get_all_concepts()
@@ -679,7 +785,7 @@ Remember: Reply with the COMPLETE document above, with only minor tone/clarity i
             if concept['name'].lower() == concept_name.lower():
                 concept_info = concept
                 break
-        
+
         # Load child context for cultural/context flexibility (language, tone, examples, etc.)
         child_ctx = await get_child_context(child_id=child_id, language_override=language)
         output_language = (child_ctx.get("language") or "English").strip() or "English"
@@ -1082,7 +1188,13 @@ Remember: Reply with the COMPLETE document above, with only minor tone/clarity i
                 "Revision cards: truncated study guide from %s to %s chars so prompt fits context",
                 len(content), len(content_for_cards),
             )
+        logger.info(
+            "Revision cards: using study guide content length=%s chars (max=%s)",
+            len(content_for_cards), REVISION_CARDS_CONTENT_MAX_CHARS,
+        )
         prompt = f"""
+You MUST output a JSON array of at least 10 revision cards (each object with "front" and "back" only). Do NOT output a single card object—output a list starting with [ and ending with ].
+
 Extract revision cards from this study guide. Write ALL card "front" and "back" text in **{output_lang}** only. Keep LaTeX and math unchanged.
 
 **Context (use this scope for definitions and formulas):**
@@ -1093,12 +1205,12 @@ Concept: {concept_name}
 {content_for_cards}
 
 ### TASK: Structural Content Extraction
-Review the provided text and generate MULTIPLE cards (do not stop after one card):
+Review the provided text and generate MULTIPLE cards. Do NOT return only one card—Physics, Mathematics, and other subjects always have enough content for 10+ cards.
 1. **5-8 Definitions**: Focus on fundamental terms found in Sections 1 and 2.
 2. **5-8 Formulas**: Extract core equations. Use LaTeX.
 3. **3-5 Procedural Examples**: Extract full problems and all steps from Sections 4 or 7.
 
-You MUST output at least 10 cards total (e.g. 5 definitions + 3 formulas + 2 procedural minimum). Aim for 13–20 cards when the guide has enough content.
+You MUST output at least 10 cards total (e.g. 5 definitions + 3 formulas + 2 procedural minimum). Aim for 13–20 cards. Returning a single card or 1–2 cards is incorrect; always return a full JSON array of 10+ cards.
 
 ### OUTPUT RULES:
 - If a problem in the text has a calculation error or uses an incorrect formula for the given variables, correct it in the card output.
@@ -1155,7 +1267,7 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
 ## 2. FORMATTING & JSON SAFETY (CRITICAL)
 - **JSON Structure**: Output a RAW JSON ARRAY only. 
   - **MUST start with `[` and end with `]`** - This is an array, not a single object.
-  - **Do NOT return a single card object** - Always return an array of at least 10 cards (5–8 definitions + 5–8 formulas + 3–5 procedural). You have enough token budget to output all of them; do not stop after one or two cards.
+  - **Do NOT return a single card object** - Always return an array of at least 10 cards (5–8 definitions + 5–8 formulas + 3–5 procedural). Physics and Mathematics guides have many definitions and formulas; output all of them. You have enough token budget (12000 tokens); do not stop after one or two cards.
   - Do NOT wrap the array in a "cards" key. 
   - Do NOT include markdown code blocks (```json).
 - **LaTeX in JSON**: In JSON string values, backslashes must be escaped. Write `\\\\frac`, `\\\\text`, `\\\\vec`, `\\\\Delta` (double backslash) so that after JSON parsing the card text contains single backslashes (e.g. \\frac). Never use \\t, \\n, or \\f in the JSON string for formatting—they become control characters (tab, newline, form feed) and break formulas. Use literal spaces and actual newlines only where intended.
@@ -1169,111 +1281,130 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
 - **Back**: Comprehensive and detailed - include all necessary information, formulas, steps, and explanations. No length limit - be thorough.
 """
 
-        try:
-            response = await self.llm_service.generate_json(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                max_tokens=REVISION_CARDS_MAX_TOKENS,
-            )
-            
-            logger.info(f"LLM response type for revision cards: {type(response)}")
-            logger.debug(f"LLM response for revision cards (first 500 chars): {str(response)[:500]}")
-            
-            # Parse response
-            cards = []
-            if isinstance(response, dict):
-                logger.debug(f"Response is dict with keys: {list(response.keys())}")
-                if 'cards' in response:
-                    cards = response['cards']
-                    logger.debug(f"Found 'cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
-                elif 'revision_cards' in response:
-                    cards = response['revision_cards']
-                    logger.debug(f"Found 'revision_cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
-                elif 'front' in response and 'back' in response:
-                    # LLM returned a single card object instead of an array - wrap it
-                    logger.debug("LLM returned a single card object, wrapping in array")
-                    cards = [response]
+        min_cards_required = 10  # Retry if we get fewer than this
+        for attempt in range(3):  # Up to 3 attempts if we get too few cards
+            try:
+                if attempt >= 1:
+                    retry_prompt = f"""The previous response contained too few revision cards (need at least 10). This study guide has enough content for 10+ cards.
+
+{prompt}
+
+CRITICAL: Output a JSON ARRAY of at least 10 cards. Start with [ and end with ]. Each element must be an object with "front" and "back". Do NOT return a single object. Output the complete array of 10+ cards."""
+                    actual_prompt = retry_prompt
+                    logger.info("Retrying revision card generation (attempt %s): previous response had too few cards", attempt + 1)
                 else:
-                    # Try to extract cards from any array field
-                    for key, value in response.items():
-                        if isinstance(value, list):
-                            cards = value
-                            logger.debug(f"Found array in key '{key}' with {len(cards)} items")
-                            break
-            elif isinstance(response, list):
-                cards = response
-                logger.debug(f"Response is list with {len(cards)} items")
-            elif isinstance(response, str):
-                import json
-                try:
-                    parsed = json.loads(response)
-                    logger.debug(f"Parsed string response, type: {type(parsed)}")
-                    if isinstance(parsed, list):
-                        cards = parsed
-                    elif isinstance(parsed, dict):
-                        if 'cards' in parsed:
-                            cards = parsed['cards']
-                        elif 'front' in parsed and 'back' in parsed:
-                            # Single card object - wrap it
-                            logger.debug("Parsed string contains single card object, wrapping in array")
-                            cards = [parsed]
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse revision cards JSON: {e}")
-                    logger.warning(f"Response content (first 500 chars): {response[:500]}")
-                    cards = []
-            else:
-                logger.warning(f"Unexpected response type: {type(response)}")
-            
-            logger.info(f"Extracted {len(cards)} cards from LLM response")
-            
-            # Validate and clean cards (LaTeX: single pipeline in normalize_revision_card_latex)
-            valid_cards = []
-            for idx, card in enumerate(cards):
-                if isinstance(card, dict) and 'front' in card and 'back' in card:
-                    front_raw = card.get('front', '')
-                    back_raw = card.get('back', '')
-                    front = front_raw if isinstance(front_raw, str) else str(front_raw)
-                    back = back_raw if isinstance(back_raw, str) else str(back_raw)
+                    actual_prompt = prompt
 
-                    front = normalize_revision_card_latex(front)
-                    back = normalize_revision_card_latex(back)
-
-                    # Replace literal \n strings with actual newlines (if they're escaped as \\n)
-                    back = back.replace('\\n', '\n')
-                    front = front.replace('\\n', '\n')
-                    
-                    # Remove [LaTeX] markers that LLM sometimes adds
-                    back = re.sub(r'\[LaTeX\]', '', back, flags=re.IGNORECASE)
-                    back = re.sub(r'\[latex\]', '', back, flags=re.IGNORECASE)
-                    front = re.sub(r'\[LaTeX\]', '', front, flags=re.IGNORECASE)
-                    front = re.sub(r'\[latex\]', '', front, flags=re.IGNORECASE)
-                    
-                    # Clean up multiple consecutive newlines (more than 2)
-                    back = re.sub(r'\n{3,}', '\n\n', back)
-                    front = re.sub(r'\n{3,}', '\n\n', front)
-                    
-                    # Strip whitespace
-                    front = front.strip()
-                    back = back.strip()
-                    
-                    if front and back:
-                        valid_cards.append({
-                            'front': front,
-                            'back': back
-                        })
+                response = await self.llm_service.generate_json(
+                    prompt=actual_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=REVISION_CARDS_MAX_TOKENS,
+                )
+                
+                logger.info(f"LLM response type for revision cards: {type(response)}")
+                logger.debug(f"LLM response for revision cards (first 500 chars): {str(response)[:500]}")
+                
+                # Parse response
+                cards = []
+                if isinstance(response, dict):
+                    logger.debug(f"Response is dict with keys: {list(response.keys())}")
+                    if 'cards' in response:
+                        cards = response['cards']
+                        logger.debug(f"Found 'cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
+                    elif 'revision_cards' in response:
+                        cards = response['revision_cards']
+                        logger.debug(f"Found 'revision_cards' key with {len(cards) if isinstance(cards, list) else 'non-list'} items")
+                    elif 'front' in response and 'back' in response:
+                        # LLM returned a single card object instead of an array - wrap it
+                        logger.debug("LLM returned a single card object, wrapping in array")
+                        cards = [response]
                     else:
-                        logger.debug(f"Card {idx} filtered out: front empty or back empty")
+                        # Try to extract cards from any array field
+                        for key, value in response.items():
+                            if isinstance(value, list):
+                                cards = value
+                                logger.debug(f"Found array in key '{key}' with {len(cards)} items")
+                                break
+                elif isinstance(response, list):
+                    cards = response
+                    logger.debug(f"Response is list with {len(cards)} items")
+                elif isinstance(response, str):
+                    import json
+                    try:
+                        parsed = json.loads(response)
+                        logger.debug(f"Parsed string response, type: {type(parsed)}")
+                        if isinstance(parsed, list):
+                            cards = parsed
+                        elif isinstance(parsed, dict):
+                            if 'cards' in parsed:
+                                cards = parsed['cards']
+                            elif 'front' in parsed and 'back' in parsed:
+                                # Single card object - wrap it
+                                logger.debug("Parsed string contains single card object, wrapping in array")
+                                cards = [parsed]
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse revision cards JSON: {e}")
+                        logger.warning(f"Response content (first 500 chars): {response[:500]}")
+                        cards = []
                 else:
-                    logger.debug(f"Card {idx} invalid: type={type(card)}, has_front={'front' in card if isinstance(card, dict) else False}, has_back={'back' in card if isinstance(card, dict) else False}")
-            
-            logger.info(f"Generated {len(valid_cards)} valid revision cards for {concept_name} (from {len(cards)} total cards)")
-            if valid_cards:
-                logger.debug(f"First card example: front='{valid_cards[0]['front'][:50]}...', back='{valid_cards[0]['back'][:50]}...'")
-            return valid_cards
-            
-        except Exception as e:
-            logger.warning(f"Failed to generate revision cards using LLM: {e}", exc_info=True)
-            return []
+                    logger.warning(f"Unexpected response type: {type(response)}")
+                
+                logger.info(f"Extracted {len(cards)} cards from LLM response")
+                
+                # Validate and clean cards (LaTeX: single pipeline in normalize_revision_card_latex)
+                valid_cards = []
+                for idx, card in enumerate(cards):
+                    if isinstance(card, dict) and 'front' in card and 'back' in card:
+                        front_raw = card.get('front', '')
+                        back_raw = card.get('back', '')
+                        front = front_raw if isinstance(front_raw, str) else str(front_raw)
+                        back = back_raw if isinstance(back_raw, str) else str(back_raw)
+
+                        front = normalize_revision_card_latex(front)
+                        back = normalize_revision_card_latex(back)
+
+                        # Replace literal \n strings with actual newlines (if they're escaped as \\n)
+                        back = back.replace('\\n', '\n')
+                        front = front.replace('\\n', '\n')
+                        
+                        # Remove [LaTeX] markers that LLM sometimes adds
+                        back = re.sub(r'\[LaTeX\]', '', back, flags=re.IGNORECASE)
+                        back = re.sub(r'\[latex\]', '', back, flags=re.IGNORECASE)
+                        front = re.sub(r'\[LaTeX\]', '', front, flags=re.IGNORECASE)
+                        front = re.sub(r'\[latex\]', '', front, flags=re.IGNORECASE)
+                        
+                        # Clean up multiple consecutive newlines (more than 2)
+                        back = re.sub(r'\n{3,}', '\n\n', back)
+                        front = re.sub(r'\n{3,}', '\n\n', front)
+                        
+                        # Strip whitespace
+                        front = front.strip()
+                        back = back.strip()
+                        
+                        if front and back:
+                            valid_cards.append({
+                                'front': front,
+                                'back': back
+                            })
+                        else:
+                            logger.debug(f"Card {idx} filtered out: front empty or back empty")
+                    else:
+                        logger.debug(f"Card {idx} invalid: type={type(card)}, has_front={'front' in card if isinstance(card, dict) else False}, has_back={'back' in card if isinstance(card, dict) else False}")
+                
+                logger.info(f"Generated {len(valid_cards)} valid revision cards for {concept_name} (from {len(cards)} total cards)")
+                if valid_cards:
+                    logger.debug(f"First card example: front='{valid_cards[0]['front'][:50]}...', back='{valid_cards[0]['back'][:50]}...'")
+                if len(valid_cards) >= min_cards_required or attempt == 2:
+                    return valid_cards
+                # Too few cards; retry with stronger prompt
+                continue
+
+            except Exception as e:
+                logger.warning(f"Failed to generate revision cards using LLM (attempt {attempt + 1}): {e}", exc_info=True)
+                if attempt == 2:
+                    return []
+                continue
+        return []
     
     async def _save_study_guide(
         self,
@@ -1454,7 +1585,12 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
                         guide_dict['metadata'] = {}
                 if isinstance(guide_dict.get('metadata'), dict) and 'revision_cards' in guide_dict['metadata']:
                     raw_cards = guide_dict['metadata']['revision_cards']
-                    logger.info(f"Found {len(raw_cards)} revision cards in metadata; normalizing LaTeX for display")
+                    # Ensure we always have a list (DB or legacy may store a single card object)
+                    if isinstance(raw_cards, dict) and 'front' in raw_cards and 'back' in raw_cards:
+                        raw_cards = [raw_cards]
+                    elif not isinstance(raw_cards, list):
+                        raw_cards = []
+                    logger.debug(f"Found {len(raw_cards)} revision cards in metadata; normalizing LaTeX for display")
                     normalized_cards = []
                     for c in raw_cards:
                         if isinstance(c, dict) and 'front' in c and 'back' in c:
@@ -1536,6 +1672,11 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
                             guide_dict['metadata'] = {}
                     if isinstance(guide_dict.get('metadata'), dict) and 'revision_cards' in guide_dict['metadata']:
                         raw_cards = guide_dict['metadata']['revision_cards']
+                        # Ensure we always have a list (DB or legacy may store a single card object)
+                        if isinstance(raw_cards, dict) and 'front' in raw_cards and 'back' in raw_cards:
+                            raw_cards = [raw_cards]
+                        elif not isinstance(raw_cards, list):
+                            raw_cards = []
                         normalized_cards = []
                         for c in raw_cards:
                             if isinstance(c, dict) and 'front' in c and 'back' in c:

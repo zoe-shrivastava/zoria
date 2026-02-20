@@ -34,6 +34,17 @@ export default function StudyGuide({
       setLoading(true)
       const data = await tests.getStudyGuide(guideId)
       setGuide(data)
+      // If backend is still regenerating, show generating state and poll until ready
+      if (data?.metadata?.regeneration_status === 'in_progress') {
+        setRegenerating(true)
+        try {
+          await tests.pollStudyGuideUntilReady(guideId)
+          const updated = await tests.getStudyGuide(guideId)
+          setGuide(updated)
+        } finally {
+          setRegenerating(false)
+        }
+      }
     } catch (err) {
       console.error('Failed to load study guide:', err)
       showNotification(err.message || 'Failed to load study guide', 'error')
@@ -44,24 +55,36 @@ export default function StudyGuide({
 
   const handleRegenerate = async () => {
     if (!guideId) return
-    
+
+    let isAlreadyInProgress = false
     try {
       setRegenerating(true)
       const result = await tests.regenerateStudyGuide(guideId, preferredLanguage)
-      showNotification('Study guide regenerated successfully', 'success')
-      // Reload the guide to show the new content
-      // If a new guide_id was returned, use it; otherwise use the existing one
-      const newGuideId = result.guide_id || guideId
-      if (newGuideId !== guideId && onClose) {
-        // If guide ID changed and we have onClose, we might need to update the parent
-        // For now, just reload with the existing guideId
+      // 202 Accepted: regeneration started in background; poll until ready
+      if (result?.guide_id != null && result.guide === undefined) {
+        showNotification('Regeneration started. This may take a few minutes.', 'info')
+        await tests.pollStudyGuideUntilReady(guideId)
+        await loadGuide()
+        showNotification('Study guide regenerated successfully', 'success')
+      } else {
+        await loadGuide()
+        showNotification('Study guide regenerated successfully', 'success')
       }
-      await loadGuide()
     } catch (err) {
       console.error('Failed to regenerate study guide:', err)
-      showNotification(err.message || 'Failed to regenerate study guide', 'error')
+      // 409 = generation already in progress; keep disabled and poll until the other generation finishes
+      isAlreadyInProgress = err.status === 409 || (err.message && String(err.message).includes('already in progress'))
+      showNotification(err.message || 'Failed to regenerate study guide', isAlreadyInProgress ? 'info' : 'error')
+      if (isAlreadyInProgress) {
+        try {
+          await tests.pollStudyGuideUntilReady(guideId)
+          await loadGuide()
+        } finally {
+          setRegenerating(false)
+        }
+      }
     } finally {
-      setRegenerating(false)
+      if (!isAlreadyInProgress) setRegenerating(false)
     }
   }
 
