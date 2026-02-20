@@ -357,7 +357,7 @@ class EvaluationReportService:
                         'most_common_error': max(perf['error_types'].items(), key=lambda x: x[1])[0] if perf['error_types'] else None
                     })
         
-        # Calculate areas of focus (concepts with <60% performance)
+        # Calculate areas of focus (concepts with <90% performance)
         areas_of_focus = []
         logger.info(f"Evaluating {len(concept_performance)} concepts for focus areas")
         for concept, perf in concept_performance.items():
@@ -368,8 +368,8 @@ class EvaluationReportService:
                 
                 logger.debug(f"Concept '{concept}': accuracy={accuracy:.1f}%, score={score_percentage:.1f}%, avg={avg_performance:.1f}%, questions={perf['total_questions']}")
                 
-                if avg_performance < 60:
-                    logger.info(f"Found focus area: {concept} (avg_performance={avg_performance:.1f}%)")
+                if avg_performance < 90:
+                    logger.info(f"Found focus area: {concept} (avg_performance={avg_performance:.1f}%, threshold <90%)")
                     # Get most common errors and misconceptions
                     common_errors = sorted(
                         perf['error_types'].items(),

@@ -115,7 +115,7 @@ STUDY_GUIDE_SECTION_MAX_TOKENS = 1200
 STUDY_GUIDE_VALIDATION_MAX_TOKENS = 18000  # Must fit full 8-section guide
 STUDY_GUIDE_DOCUMENT_MAX_CHARS = 35000    # Max chars sent to validation/pedagogical (full guide)
 REVISION_CARDS_MAX_TOKENS = 12000         # Enough for 10–20 cards with LaTeX (5–8 defs + 5–8 formulas + 3–5 procedural)
-REVISION_CARDS_CONTENT_MAX_CHARS = 22000  # Max study guide chars in prompt so system+user+response fit in model context
+REVISION_CARDS_CONTENT_MAX_CHARS = 35000  # Full guide (match STUDY_GUIDE_DOCUMENT_MAX_CHARS) so revision cards get all sections
 NUM_SECTIONS = 8
 
 # Section titles and one-line requirements for outline/section prompts
