@@ -6,6 +6,24 @@ import MathText from './MathText'
 import StudyGuide from './StudyGuide'
 import RevisionCardsView from './RevisionCardsView'
 
+// Placeholder for AI Coach input in the user's selected language (native script where applicable)
+function getCoachInputPlaceholder(language) {
+  const lang = (language || 'English').trim()
+  if (lang === 'Hindi') return 'कोई सवाल पूछें...'
+  if (lang === 'Spanish') return 'Haz una pregunta...'
+  if (lang === 'French') return 'Pose une question...'
+  return 'Ask a question...'
+}
+
+// BCP 47 lang attribute so iPad/OS suggests the right keyboard when the input is focused
+function getCoachInputLang(language) {
+  const lang = (language || 'English').trim()
+  if (lang === 'Hindi') return 'hi'
+  if (lang === 'Spanish') return 'es'
+  if (lang === 'French') return 'fr'
+  return 'en'
+}
+
 export default function AICoach({
   isOpen,
   onToggle,
@@ -19,6 +37,8 @@ export default function AICoach({
   preferredLanguage = null,
 }) {
   const [messages, setMessages] = useState([])
+  const inputPlaceholder = getCoachInputPlaceholder(preferredLanguage)
+  const inputLang = getCoachInputLang(preferredLanguage)
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef(null)
@@ -632,10 +652,11 @@ export default function AICoach({
                 ) : (
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <textarea
+                      lang={inputLang}
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       onKeyPress={handleKeyPress}
-                      placeholder="Ask a question..."
+                      placeholder={inputPlaceholder}
                       style={{
                         flex: 1,
                         padding: '0.75rem',
@@ -924,10 +945,11 @@ export default function AICoach({
       }}>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <textarea
+            lang={inputLang}
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask a question..."
+            placeholder={inputPlaceholder}
             style={{
               flex: 1,
               padding: '0.75rem',
