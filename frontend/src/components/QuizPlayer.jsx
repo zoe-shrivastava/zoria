@@ -1557,7 +1557,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
             let totalEdits = 0
             let totalHints = 0
             qList.forEach((q) => {
-              const hasAnswer = q.answer != null && q.answer !== ''
+              const hasAnswer = q.answer != null && String(q.answer).trim() !== ''
               if (hasAnswer) questionsAnswered++
               if (q.is_correct === true) correctCount++
               else if (q.score != null && q.max_score != null && q.max_score > 0 && q.score > 0 && q.score < q.max_score) partialCount++

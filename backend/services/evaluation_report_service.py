@@ -579,7 +579,7 @@ class EvaluationReportService:
                     """
                     SELECT
                         tr.test_id,
-                        COUNT(*)::int AS questions_answered,
+                        SUM(CASE WHEN tr.answer IS NOT NULL AND TRIM(COALESCE(tr.answer, '')) <> '' THEN 1 ELSE 0 END)::int AS questions_answered,
                         SUM(CASE WHEN tr.is_correct THEN 1 ELSE 0 END)::int AS correct_count,
                         SUM(CASE WHEN tr.is_correct = false AND tr.score > 0 AND tq.max_score > 0 AND tr.score < tq.max_score THEN 1 ELSE 0 END)::int AS partial_count,
                         SUM(CASE WHEN tr.is_correct = false AND (tr.score = 0 OR tr.score IS NULL OR tr.score >= COALESCE(tq.max_score, 1)) THEN 1 ELSE 0 END)::int AS incorrect_count,
