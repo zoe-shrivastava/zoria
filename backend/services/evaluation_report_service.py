@@ -525,6 +525,9 @@ class EvaluationReportService:
                         "Tests must be created with subject+topics so metadata.topics is set."
                     )
         
+        # Remove study guides for concepts no longer in areas of focus (e.g. test deleted/reopened)
+        await self._delete_orphan_study_guides(child_id, areas_of_focus)
+        
         # Study guides: either return placeholders (generating in background) or fill from DB
         study_guide_links = []
         if generate_study_guides and areas_of_focus:
@@ -568,6 +571,55 @@ class EvaluationReportService:
                     'inferred_session_state': state
                 })
         
+        # Enrich session_states with per-test stats (questions answered, unanswered, correct/partial/incorrect, time, edits, hints)
+        if session_states:
+            test_ids = [s['test_id'] for s in session_states]
+            try:
+                rows = await self.db.fetch(
+                    """
+                    SELECT
+                        tr.test_id,
+                        COUNT(*)::int AS questions_answered,
+                        SUM(CASE WHEN tr.is_correct THEN 1 ELSE 0 END)::int AS correct_count,
+                        SUM(CASE WHEN tr.is_correct = false AND tr.score > 0 AND tq.max_score > 0 AND tr.score < tq.max_score THEN 1 ELSE 0 END)::int AS partial_count,
+                        SUM(CASE WHEN tr.is_correct = false AND (tr.score = 0 OR tr.score IS NULL OR tr.score >= COALESCE(tq.max_score, 1)) THEN 1 ELSE 0 END)::int AS incorrect_count,
+                        COALESCE(SUM(tr.time_spent_seconds), 0)::int AS total_time_seconds,
+                        COALESCE(SUM(COALESCE((tr.metadata->>'edit_count')::int, 0)), 0)::int AS total_edits,
+                        COALESCE(SUM(COALESCE((tr.metadata->>'hints_accessed')::int, 0)), 0)::int AS total_hints
+                    FROM test_responses tr
+                    LEFT JOIN test_questions tq ON tq.test_id = tr.test_id
+                        AND (tq.question_id = tr.question_id OR tq.original_question_id = tr.question_id)
+                    WHERE tr.test_id::text = ANY($1)
+                    GROUP BY tr.test_id
+                    """,
+                    test_ids
+                )
+                stats_by_test = {str(r['test_id']): dict(r) for r in rows}
+                total_questions_rows = await self.db.fetch(
+                    """
+                    SELECT test_id, COUNT(*)::int AS total_questions
+                    FROM test_questions
+                    WHERE test_id::text = ANY($1)
+                    GROUP BY test_id
+                    """,
+                    test_ids
+                )
+                total_by_test = {str(r['test_id']): r['total_questions'] for r in total_questions_rows}
+                for s in session_states:
+                    st = stats_by_test.get(s['test_id']) or {}
+                    total_q = total_by_test.get(s['test_id'], 0)
+                    answered = st.get('questions_answered', 0)
+                    s['questions_answered'] = answered
+                    s['unanswered_count'] = max(0, total_q - answered)
+                    s['correct_count'] = st.get('correct_count', 0)
+                    s['partial_count'] = st.get('partial_count', 0)
+                    s['incorrect_count'] = st.get('incorrect_count', 0)
+                    s['total_time_seconds'] = st.get('total_time_seconds', 0)
+                    s['total_edits'] = st.get('total_edits', 0)
+                    s['total_hints'] = st.get('total_hints', 0)
+            except Exception as e:
+                logger.warning("Could not load per-test stats for session states: %s", e)
+        
         return {
             'child_id': child_id,
             'generated_at': datetime.utcnow().isoformat(),
@@ -597,6 +649,43 @@ class EvaluationReportService:
             'study_guide_links': study_guide_links,
             'recommendations': self._generate_recommendations(strengths, areas_of_focus, error_patterns)
         }
+
+    async def _delete_orphan_study_guides(
+        self, child_id: str, areas_of_focus: List[Dict]
+    ) -> None:
+        """Delete study guides for this child whose concept is no longer in areas of focus.
+        E.g. when the only Physics test was deleted or reopened, remove Physics study guide(s).
+        """
+        try:
+            table_check = await self.db.fetchrow(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'study_guides')"
+            )
+            if not table_check or not table_check['exists']:
+                return
+        except Exception as e:
+            logger.warning("Could not check study_guides table for orphan cleanup: %s", e)
+            return
+        focus_concepts = [a.get('concept', '') or '' for a in areas_of_focus if (a.get('concept') or '').strip()]
+        try:
+            if not focus_concepts:
+                deleted = await self.db.execute(
+                    "DELETE FROM study_guides WHERE child_id = $1",
+                    child_id
+                )
+                if deleted and deleted != "DELETE 0":
+                    logger.info("Deleted orphan study guides for child %s (no current focus areas)", child_id)
+            else:
+                deleted = await self.db.execute(
+                    """
+                    DELETE FROM study_guides
+                    WHERE child_id = $1 AND NOT (concept_name = ANY($2::text[]))
+                    """,
+                    child_id, focus_concepts
+                )
+                if deleted and deleted != "DELETE 0":
+                    logger.info("Deleted orphan study guides for child %s (concepts no longer in focus)", child_id)
+        except Exception as e:
+            logger.warning("Failed to delete orphan study guides for child %s: %s", child_id, e)
 
     async def _get_existing_study_guide_links(
         self, child_id: str, areas_of_focus: List[Dict]

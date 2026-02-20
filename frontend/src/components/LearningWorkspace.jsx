@@ -14,7 +14,7 @@ export const useLearningContext = () => {
   return context
 }
 
-export default function LearningWorkspace({ childId, daysBack = 30, showAllGuides = false, user = null, preferredLanguage = null }) {
+export default function LearningWorkspace({ childId, daysBack = 30, showAllGuides = false, user = null, preferredLanguage = null, onOpenTest = null }) {
   const isParent = user?.role === 'parent'
   const [activeGuideId, setActiveGuideId] = useState(null)
   const [activeContext, setActiveContext] = useState(null)
@@ -80,6 +80,7 @@ export default function LearningWorkspace({ childId, daysBack = 30, showAllGuide
             user={user}
             isWorkspaceMode={true}
             preferredLanguage={preferredLanguage}
+            onOpenTest={onOpenTest}
           />
         </div>
 

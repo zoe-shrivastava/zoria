@@ -44,6 +44,7 @@ class TestQuestionResponse(BaseModel):
     answer: Optional[str] = None
     score: Optional[float] = None
     is_correct: Optional[bool] = None
+    time_spent_seconds: Optional[int] = Field(None, description="Time spent on this question in seconds")
     detailed_feedback: Optional[str] = Field(None, description="Detailed feedback about what is wrong, what is missing, or what is correct")
     response_metadata: Optional[Dict[str, Any]] = Field(None, description="Behavioral data (edit_count, hints_accessed, latency_ms, etc.) for resume")
 

@@ -1,38 +1,99 @@
 import { useState, useMemo } from 'react'
 import MathText from './MathText'
 
-/** Find index just after the first complete $...$ or $$...$$ block. Returns -1 if none. */
-function findEndOfFirstMathBlock(s) {
-  const dollarIdx = s.indexOf('$')
-  if (dollarIdx === -1) return -1
-  if (s[dollarIdx + 1] === '$') {
-    const close = s.indexOf('$$', dollarIdx + 2)
-    return close === -1 ? -1 : close + 2
-  }
-  // Inline $...$: find matching $ while tracking brace depth; skip \ and next char
-  let depth = 0
-  for (let j = dollarIdx + 1; j < s.length; j++) {
-    if (s[j] === '\\') {
-      j++
+/**
+ * Split card text by math delimiters. Backend sends already-normalized LaTeX;
+ * no LaTeX repair or alteration on the frontend—only split and render.
+ * Returns [{ type: 'text'|'math', content: string, display?: boolean }, ...]
+ */
+function splitByMath(str) {
+  if (!str || typeof str !== 'string') return [{ type: 'text', content: str || '' }]
+  const segments = []
+  let i = 0
+  while (i < str.length) {
+    // Display: $$...$$
+    if (str.slice(i, i + 2) === '$$') {
+      const end = str.indexOf('$$', i + 2)
+      if (end === -1) {
+        segments.push({ type: 'text', content: str.slice(i) })
+        break
+      }
+      segments.push({ type: 'math', content: str.slice(i, end + 2), display: true })
+      i = end + 2
       continue
     }
-    if (s[j] === '{') depth++
-    else if (s[j] === '}') depth--
-    else if (s[j] === '$' && depth === 0) return j + 1
+    // Display: \[...\]
+    if (str.slice(i, i + 2) === '\\[') {
+      const end = str.indexOf('\\]', i + 2)
+      if (end === -1) {
+        segments.push({ type: 'text', content: str.slice(i) })
+        break
+      }
+      segments.push({ type: 'math', content: str.slice(i, end + 2), display: true })
+      i = end + 2
+      continue
+    }
+    // Inline: $...$
+    if (str[i] === '$') {
+      let depth = 0
+      let j = i + 1
+      while (j < str.length) {
+        if (str[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (str[j] === '{') depth++
+        else if (str[j] === '}') depth--
+        else if (str[j] === '$' && depth === 0) break
+        j++
+      }
+      if (j < str.length) {
+        segments.push({ type: 'math', content: str.slice(i, j + 1), display: false })
+        i = j + 1
+        continue
+      }
+    }
+    // No math start; take until next $ or end
+    const next = str.indexOf('$', i)
+    const end = next === -1 ? str.length : next
+    if (end > i) {
+      segments.push({ type: 'text', content: str.slice(i, end) })
+    }
+    i = end === i ? i + 1 : end
   }
-  return -1
+  return segments.length ? segments : [{ type: 'text', content: '' }]
 }
 
 /**
- * RevisionCard - A flashcard-style component for studying
- * Shows front (question/concept) and back (answer/explanation)
+ * Renders card content by splitting on math delimiters. No Markdown parsing,
+ * no LaTeX repair—backend is the single source of truth for LaTeX.
  */
-export default function RevisionCard({ 
-  front, 
-  back, 
-  cardNumber, 
+function CardContent({ text, style = {} }) {
+  const segments = useMemo(() => splitByMath(text), [text])
+  return (
+    <span style={{ whiteSpace: 'pre-wrap', ...style }}>
+      {segments.map((seg, idx) =>
+        seg.type === 'text' ? (
+          <span key={idx}>{seg.content}</span>
+        ) : (
+          <MathText key={idx} text={seg.content} inline={!seg.display} />
+        )
+      )}
+    </span>
+  )
+}
+
+/**
+ * RevisionCard - A flashcard-style component for studying.
+ * Front/back are rendered by splitting on $...$ and $$...$$; LaTeX is
+ * normalized only in the backend—do not repair or alter it here.
+ */
+export default function RevisionCard({
+  front,
+  back,
+  cardNumber,
   totalCards,
-  onFlip 
+  onFlip
 }) {
   const [isFlipped, setIsFlipped] = useState(false)
 
@@ -40,59 +101,6 @@ export default function RevisionCard({
     setIsFlipped(!isFlipped)
     if (onFlip) onFlip(!isFlipped)
   }
-
-  // Display-only: literal \n -> newline, close math before "Step", and (on back) \n -> <br> with math protected.
-  // LaTeX repair is done in the backend (normalize_revision_card_latex); do not add repair here so study guide and quiz (MathText) stay unchanged.
-  const normalizeLaTeX = (text, isBack = false) => {
-    if (!text || typeof text !== 'string') return text
-
-    let normalized = text.replace(/\\n/g, '\n')
-    normalized = normalized.replace(/\}\s*\n\s*Step/g, '}$\n\nStep')
-
-    if (isBack) {
-      const mathExpressions = []
-      let mathIndex = 0
-      normalized = normalized.replace(/\$\$[\s\S]*?\$\$/g, (match) => {
-        const placeholder = `__MATH_DISPLAY_${mathIndex}__`
-        mathExpressions.push({ placeholder, content: match })
-        mathIndex++
-        return placeholder
-      })
-      normalized = normalized.replace(/\\\[[\s\S]*?\\\]/g, (match) => {
-        const placeholder = `__MATH_BACKSLASH_${mathIndex}__`
-        mathExpressions.push({ placeholder, content: match })
-        mathIndex++
-        return placeholder
-      })
-      normalized = normalized.replace(/\$[^$\n]+?\$/g, (match) => {
-        const placeholder = `__MATH_INLINE_${mathIndex}__`
-        mathExpressions.push({ placeholder, content: match })
-        mathIndex++
-        return placeholder
-      })
-      normalized = normalized.replace(/\n/g, '<br>')
-      mathExpressions.forEach(({ placeholder, content }) => {
-        normalized = normalized.replace(placeholder, content)
-      })
-      normalized = normalized.replace(/\s*\$+\s*$/, '')
-    }
-
-    return normalized
-  }
-
-  const normalizedFront = useMemo(() => normalizeLaTeX(front, false), [front])
-  const normalizedBack = useMemo(() => normalizeLaTeX(back, true), [back])
-  // Split back into formula (first complete $...$ or $$...$$) and steps text. Use proper matching so we
-  // don't split on }$ inside \frac{...} or \text{...}; only split when the rest looks like "Step 2" etc.
-  const { backFormula, backSteps } = useMemo(() => {
-    const s = normalizedBack
-    const endOfFirstMath = findEndOfFirstMathBlock(s)
-    if (endOfFirstMath === -1) return { backFormula: s, backSteps: null }
-    const after = s.slice(endOfFirstMath)
-    // Only split when the remainder is essentially "Step 2: ..." (no extra content/formulas between)
-    if (!/^(\s|<br>)*Step\s*\d/i.test(after)) return { backFormula: s, backSteps: null }
-    return { backFormula: s.slice(0, endOfFirstMath), backSteps: after }
-  }, [normalizedBack])
 
   return (
     <div
@@ -135,28 +143,35 @@ export default function RevisionCard({
             color: 'var(--text-primary)'
           }}
         >
-          <div style={{ 
-            position: 'absolute', 
-            top: '1rem', 
-            right: '1rem', 
-            fontSize: '0.875rem',
-            opacity: 0.8
-          }}>
+          <div
+            style={{
+              position: 'absolute',
+              top: '1rem',
+              right: '1rem',
+              fontSize: '0.875rem',
+              opacity: 0.8
+            }}
+          >
             {cardNumber} / {totalCards}
           </div>
-          <div style={{ 
-            fontSize: '1.5rem', 
-            fontWeight: 'bold', 
-            marginBottom: '1rem',
-            textAlign: 'center'
-          }}>
-            <MathText text={normalizedFront} inline={false} />
+          <div
+            style={{
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              textAlign: 'center',
+              width: '100%'
+            }}
+          >
+            <CardContent text={front || ''} />
           </div>
-          <div style={{ 
-            fontSize: '0.875rem', 
-            opacity: 0.9,
-            marginTop: '1rem'
-          }}>
+          <div
+            style={{
+              fontSize: '0.875rem',
+              opacity: 0.9,
+              marginTop: '1rem'
+            }}
+          >
             Click to flip
           </div>
         </div>
@@ -183,47 +198,40 @@ export default function RevisionCard({
             overflow: 'hidden'
           }}
         >
-          <div style={{ 
-            position: 'absolute', 
-            top: '1rem', 
-            right: '1rem', 
-            fontSize: '0.875rem',
-            color: 'var(--text-muted)'
-          }}>
+          <div
+            style={{
+              position: 'absolute',
+              top: '1rem',
+              right: '1rem',
+              fontSize: '0.875rem',
+              color: 'var(--text-muted)'
+            }}
+          >
             {cardNumber} / {totalCards}
           </div>
-          <div style={{ 
-            fontSize: '1rem', 
-            lineHeight: 1.6,
-            color: 'var(--text-primary)',
-            whiteSpace: 'pre-wrap',
-            flex: '1 1 auto',
-            minHeight: 0,
-            overflowY: 'auto'
-          }}>
-            {backSteps != null ? (
-              <>
-                <MathText text={backFormula} inline={false} />
-                {backSteps && (
-                  <div
-                    style={{ marginTop: '0.75rem' }}
-                    dangerouslySetInnerHTML={{ __html: backSteps }}
-                  />
-                )}
-              </>
-            ) : (
-              <MathText text={normalizedBack} inline={false} />
-            )}
+          <div
+            style={{
+              fontSize: '1rem',
+              lineHeight: 1.6,
+              color: 'var(--text-primary)',
+              flex: '1 1 auto',
+              minHeight: 0,
+              overflowY: 'auto'
+            }}
+          >
+            <CardContent text={back || ''} />
           </div>
-          <div style={{ 
-            fontSize: '0.875rem', 
-            color: 'var(--text-muted)',
-            marginTop: '0.75rem',
-            textAlign: 'center',
-            flexShrink: 0,
-            paddingTop: '0.5rem',
-            borderTop: '1px solid var(--border-color)'
-          }}>
+          <div
+            style={{
+              fontSize: '0.875rem',
+              color: 'var(--text-muted)',
+              marginTop: '0.75rem',
+              textAlign: 'center',
+              flexShrink: 0,
+              paddingTop: '0.5rem',
+              borderTop: '1px solid var(--border-color)'
+            }}
+          >
             Click to flip back
           </div>
         </div>

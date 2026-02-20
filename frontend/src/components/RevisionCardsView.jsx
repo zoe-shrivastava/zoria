@@ -174,7 +174,8 @@ export default function RevisionCardsView({
         </div>
       )}
 
-      {/* Difficulty Feedback */}
+      {/* Difficulty Feedback - hidden in UI */}
+      {false && (
       <div style={{
         marginTop: '2rem',
         padding: '1rem',
@@ -219,6 +220,7 @@ export default function RevisionCardsView({
           </button>
         )}
       </div>
+      )}
     </div>
   )
 }

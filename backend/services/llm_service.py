@@ -78,6 +78,8 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         format: Optional[str] = None,
+        top_p: Optional[float] = None,
+        repeat_penalty: Optional[float] = None,
         document_id: Optional[str] = None,
         concept_id: Optional[str] = None,
         test_id: Optional[str] = None,
@@ -91,6 +93,8 @@ class LLMService:
             temperature: Temperature (0.0-1.0)
             max_tokens: Maximum tokens to generate
             format: Response format ('json' for JSON output, Ollama only)
+            top_p: Top-p sampling (Ollama only; e.g. 0.8 for stable study guides)
+            repeat_penalty: Repeat penalty (Ollama only; e.g. 1.1)
             document_id: Related document ID for logging
             concept_id: Related concept ID for logging
             test_id: Related test ID for logging
@@ -277,13 +281,16 @@ class LLMService:
         # Ollama path
         try:
             async with aiohttp.ClientSession() as session:
+                options: Dict[str, Any] = {"temperature": temperature}
+                if top_p is not None:
+                    options["top_p"] = top_p
+                if repeat_penalty is not None:
+                    options["repeat_penalty"] = repeat_penalty
                 payload = {
                     "model": self.model_name,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {
-                        "temperature": temperature
-                    }
+                    "options": options
                 }
                 
                 if system_prompt:

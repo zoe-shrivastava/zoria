@@ -105,7 +105,7 @@ class TestRepository:
             return None
         
         # Get questions from test_questions (independent copies)
-        # Use stored question data, fallback to original question if available
+        # Join to test_responses by either question_id or original_question_id so we always find the saved response
         questions = await self.db.fetch(
             """
             SELECT 
@@ -127,8 +127,13 @@ class TestRepository:
                 tr.metadata as response_metadata
             FROM test_questions tq
             LEFT JOIN questions q ON tq.question_id = q.id OR tq.original_question_id = q.id
-            LEFT JOIN test_responses tr ON tr.test_id = tq.test_id 
-                AND tr.question_id = COALESCE(tq.question_id, tq.original_question_id)
+            LEFT JOIN LATERAL (
+                SELECT id, answer, score, is_correct, time_spent_seconds, submitted_at, metadata
+                FROM test_responses
+                WHERE test_id = tq.test_id
+                  AND (question_id = tq.question_id OR question_id = tq.original_question_id)
+                LIMIT 1
+            ) tr ON true
             WHERE tq.test_id = $1
             ORDER BY tq.order_index
             """,
@@ -548,15 +553,17 @@ class TestRepository:
                 test_id, question_id
             )
             
-            # Parse existing metadata or create new dict
+            # Parse existing metadata or create new dict (preserve behavioral data: latency_ms, edit_count, hints_accessed)
             if existing_metadata:
                 if isinstance(existing_metadata, str):
                     try:
                         metadata = json.loads(existing_metadata)
                     except (json.JSONDecodeError, TypeError):
                         metadata = {}
+                elif isinstance(existing_metadata, dict):
+                    metadata = dict(existing_metadata)  # copy so we don't mutate
                 else:
-                    metadata = existing_metadata.copy() if existing_metadata else {}
+                    metadata = {}
             else:
                 metadata = {}
             
@@ -691,8 +698,12 @@ class TestRepository:
                 COALESCE(SUM(tr.score), 0) as total_score,
                 COALESCE(SUM(tq.max_score), 0) as max_score
             FROM test_questions tq
-            LEFT JOIN test_responses tr ON tr.test_id = tq.test_id 
-                AND tr.question_id = COALESCE(tq.question_id, tq.original_question_id)
+            LEFT JOIN LATERAL (
+                SELECT score FROM test_responses
+                WHERE test_id = tq.test_id
+                  AND (question_id = tq.question_id OR question_id = tq.original_question_id)
+                LIMIT 1
+            ) tr ON true
             WHERE tq.test_id = $1
             """,
             test_id

@@ -26,64 +26,569 @@ def _normalize_study_guide_revision_latex(text: Optional[str]) -> Optional[str]:
     return out
 
 
-def normalize_revision_card_latex(text: str) -> str:
-    """Single pipeline for revision-card LaTeX only. Apply to card front/back when building or serving.
-    Do not use on study guide body or quiz content.
-    Steps: (1) control chars from JSON (\\b/\\t/\\f), (2) \\textDelta/\\textdelta,
-    (3) unclosed \\[...], (4) collapse \\\\ -> \\, (5) rac{/ext{ lost backslash,
-    (6) stray $1\\text, (7) \\frac/\\f/frac double-fix cleanup."""
+def _normalize_revision_card_latex_one(text: str) -> str:
+    """One pass of LaTeX normalization. Used by normalize_revision_card_latex.
+    Use B+name for replacements to avoid re.sub interpreting \\f as form feed (0x0c)."""
     if not text or not isinstance(text, str):
         return text or ""
+    B = chr(92)  # single backslash; use lambdas so re.sub never sees \\f (form feed) in replacement
+    def _r(s): return lambda m: s  # replacement that returns s literally
     out = text
-    # 1) JSON escape damage: \boxed -> \b+oxed, \text -> \t+ext, \frac -> \f+rac
-    out = re.sub(r"\x08oxed", r"\\boxed", out)
-    out = re.sub(r"\x09ext", r"\\text", out)
-    out = re.sub(r"\x0crac", r"\\frac", out)
-    out = re.sub(r"\x0c([a-z]+)", r"\\\1", out)
+    _tf = r"(\\[tf]|\\\\[tf])+\s*"
+    out = re.sub(_tf + r"ext(?=\w)", _r(B + "text"), out)
+    out = re.sub(_tf + r"imes", _r(B + "times"), out)
+    out = re.sub(_tf + r"rac", _r(B + "frac"), out)
+    out = re.sub(_tf + r"oxed", _r(B + "boxed"), out)
+    out = re.sub(_tf + r"\\\\text", _r(B + "text"), out)
+    out = re.sub(_tf + r"\\\\frac", _r(B + "frac"), out)
+    out = re.sub(r"(\\[tf])+ext", _r(B + "text"), out)
+    out = re.sub(r"(\\[tf])+imes", _r(B + "times"), out)
+    out = re.sub(r"(\\[tf])+rac", _r(B + "frac"), out)
+    out = re.sub(r"(\\[tf])+oxed", _r(B + "boxed"), out)
+    out = re.sub(r"(\\[tf])+\\text", _r(B + "text"), out)
+    out = re.sub(r"(\\[tf])+\\frac", _r(B + "frac"), out)
+    _cc = r"[\x08\x09\x0c]+\s*"
+    out = re.sub(_cc + r"oxed", _r(B + "boxed"), out)
+    out = re.sub(_cc + r"ext", _r(B + "text"), out)
+    out = re.sub(_cc + r"imes", _r(B + "times"), out)
+    out = re.sub(_cc + r"rac", _r(B + "frac"), out)
+    out = re.sub(_cc + r"\\text", _r(B + "text"), out)
+    out = re.sub(_cc + r"\\frac", _r(B + "frac"), out)
+    out = re.sub(r"[\x08\x09\x0c]+oxed", _r(B + "boxed"), out)
+    out = re.sub(r"[\x08\x09\x0c]+ext", _r(B + "text"), out)
+    out = re.sub(r"[\x08\x09\x0c]+imes", _r(B + "times"), out)
+    out = re.sub(r"[\x08\x09\x0c]+rac", _r(B + "frac"), out)
+    out = re.sub(r"[\x08\x09\x0c]+\\text", _r(B + "text"), out)
+    out = re.sub(r"[\x08\x09\x0c]+\\frac", _r(B + "frac"), out)
+    out = re.sub(r"\x0crac", _r(B + "frac"), out)
+    out = re.sub(r"\x0cext", _r(B + "text"), out)
+    out = re.sub(r"\x0cimes", _r(B + "times"), out)
+    out = re.sub(r"\x0coxed", _r(B + "boxed"), out)
+    def _backslash_cmd(m):
+        g = m.group(1)
+        if g == "rac": return B + "frac"
+        if g == "ext": return B + "text"
+        if g == "imes": return B + "times"
+        if g == "oxed": return B + "boxed"
+        return B + g
+    out = re.sub(r"\x0c([a-z]+)", _backslash_cmd, out)
     out = re.sub(r"\x0c(?!\w)", "", out)
-    out = re.sub(r"\x0c\\", r"\\", out)
-    # 2) KaTeX: \textDelta / \textdelta -> \Delta, \delta
-    out = out.replace("\\textDelta", "\\Delta")
-    out = out.replace("\\textdelta", "\\delta")
-    # 3) Display math missing \]: \[...] at line/s end -> \[...\]
-    out = re.sub(r"\\\[([\s\S]*?)\](?=\s*(\n|$))", r"\\[\1\\]", out)
-    # 4) Over-escaped backslashes
+    out = re.sub(r"\x0c\\", lambda m: B, out)
+    out = out.replace("\\textDelta", B + "Delta")
+    out = out.replace("\\textdelta", B + "delta")
+    out = re.sub(r"\\\[([\s\S]*?)\](?=\s*(\n|$))", B + r"[\1" + B + "]", out)
     while "\\\\" in out:
-        out = out.replace("\\\\", "\\")
-    # 5) Lost backslash: rac{ -> \frac{, ext{ -> \text{
-    out = re.sub(r"([^\\])rac\{", r"\1\\frac{", out)
-    out = re.sub(r"^rac\{", r"\\frac{", out)
-    out = re.sub(r"([^\\])ext\{", r"\1\\text{", out)
-    out = re.sub(r"^ext\{", r"\\text{", out)
-    # 6) Stray $1\text (e.g. from \b eating a char)
-    out = re.sub(r"\$1\\text\{", r"$\\text{", out)
-    # 7) Double-fix cleanup
-    out = out.replace("\\frac\\frac", "\\frac")
-    out = re.sub(r"\\f\\frac", "\\frac", out)
-    out = re.sub(r"\\fracrac\{?", "\\frac{", out)
-    out = re.sub(r"\\fracrac", "\\frac", out)
+        out = out.replace("\\\\", B)  # B is single char, no re.sub
+    out = re.sub(r"([^\\])rac\{", lambda m: m.group(1) + B + "frac{", out)
+    out = re.sub(r"^rac\{", _r(B + "frac{"), out)
+    out = re.sub(r"([^\\])ext\{", lambda m: m.group(1) + B + "text{", out)
+    out = re.sub(r"^ext\{", _r(B + "text{"), out)
+    out = re.sub(r"\$1\\text\{", _r("$" + B + "text{"), out)
+    out = out.replace("\\frac\\frac", B + "frac")
+    out = re.sub(r"\\f\\frac", _r(B + "frac"), out)
+    out = re.sub(r"\\fracrac\{?", _r(B + "frac{"), out)
+    out = re.sub(r"\\fracrac", _r(B + "frac"), out)
+    out = re.sub(r"\$\\text\{", _r(B + "text{"), out)
+    out = re.sub(r"(\\text\{[^}]*\})\s*\$", r"\1", out)
     return out
 
 
+def normalize_revision_card_latex(text: str) -> str:
+    """Single source of truth for revision-card LaTeX. Apply to card front/back when building or serving.
+    Do not use on study guide body or quiz content. Frontend must NOT repair LaTeX—only split and render.
+    Runs multiple passes until stable so ordering does not matter."""
+    if not text or not isinstance(text, str):
+        return text or ""
+    prev, out = None, text
+    while prev != out:
+        prev, out = out, _normalize_revision_card_latex_one(out)
+    return out
+
+
+# Pipeline constants for stable, subject-accurate study guide generation
+STUDY_GUIDE_GEN_TEMPERATURE = 0.2
+STUDY_GUIDE_VALIDATION_TEMPERATURE = 0.1
+STUDY_GUIDE_TOP_P = 0.8
+STUDY_GUIDE_REPEAT_PENALTY = 1.1
+STUDY_GUIDE_OUTLINE_MAX_TOKENS = 800
+STUDY_GUIDE_SECTION_MAX_TOKENS = 1200
+STUDY_GUIDE_VALIDATION_MAX_TOKENS = 18000  # Must fit full 8-section guide
+STUDY_GUIDE_DOCUMENT_MAX_CHARS = 35000    # Max chars sent to validation/pedagogical (full guide)
+REVISION_CARDS_MAX_TOKENS = 12000         # Enough for 10–20 cards with LaTeX (5–8 defs + 5–8 formulas + 3–5 procedural)
+REVISION_CARDS_CONTENT_MAX_CHARS = 22000  # Max study guide chars in prompt so system+user+response fit in model context
+NUM_SECTIONS = 8
+
+# Section titles and one-line requirements for outline/section prompts
+SECTION_HEADINGS = [
+    "Section 1: Concept Foundation",
+    "Section 2: Core Principles & Formulas",
+    "Section 3: The Systematic Problem-Solving Protocol",
+    "Section 4: Worked Examples (Increasing Complexity)",
+    "Section 5: The Pitfall Audit (Addressing Student Errors)",
+    "Section 6: Misconceptions Debunked",
+    "Section 7: Practice Quest (Guided Practice)",
+    "Section 8: Summary & Quick Reference Sheet",
+]
+
+
 class StudyGuideService:
-    """Service for generating study guides for focus areas."""
+    """Service for generating study guides for focus areas.
     
+    Uses the Zoria master pipeline: input normalization -> outline -> section-by-section
+    generation -> validation pass -> optional pedagogical pass.
+    """
+
     def __init__(self, db: Database):
         """Initialize study guide service.
-        
+
         Args:
             db: Database instance
         """
         self.db = db
         self.concept_repo = ConceptRepository(db)
-        
+
         # Initialize LLM service with llama3.1
         self.llm_service = LLMService(
             model_name="llama3.1",
             enable_logging=True,
             context_source="study_guide_generation"
         )
-    
+
+    def _build_context_block(self, normalized: Dict[str, Any]) -> str:
+        """Build the dynamic context block injected into the master system prompt."""
+        return f"""
+-------------------------------------------------
+CONTEXT (Dynamically Injected)
+-------------------------------------------------
+Subject: {normalized.get('subject', '')}
+Concept: {normalized.get('concept_name', '')}
+Grade Level: {normalized.get('grade_level', '')}
+Focus Area: {normalized.get('focus_area', '')}
+Language: {normalized.get('output_language', 'English')}
+Cultural Tone Block: {normalized.get('cultural_block', '')}
+-------------------------------------------------
+"""
+
+    def _get_master_system_prompt(self, context_block: str, output_language: str) -> str:
+        """Zoria master system prompt (subject-agnostic). Injected with context_block."""
+        return f"""You are Zoria's Structured Educational Content Engine.
+
+Your task is to generate ONE section of a structured study guide at a time (or only the outline when asked).
+
+You must strictly follow structural, formatting, grade-level, and subject-accuracy rules.
+
+{context_block}
+
+-------------------------------------------------
+GLOBAL RULES
+-------------------------------------------------
+
+1. Audience Calibration
+- Content must match the stated Grade Level cognitive level.
+- Do not introduce concepts typically taught 2+ grade levels above.
+- Avoid university-level formalism unless Grade Level explicitly allows it.
+
+2. Subject Accuracy Rule (Critical)
+- All definitions must be correct for the stated Subject.
+- Do NOT borrow definitions from other disciplines.
+- Do NOT mix related terms incorrectly.
+- Use standard curriculum-appropriate definitions.
+
+3. Complexity Guardrail
+- Use only tools appropriate for the grade level (e.g. no calculus unless grade allows; no advanced symbolic formalism in science; no graduate-level language in humanities).
+- Keep explanations conceptually precise but age-appropriate.
+
+4. Formatting Rules
+- Use strict Markdown hierarchy (H1 > H2 > H3). Never skip heading levels.
+- Bold terms only the first time defined.
+- Use blockquotes only for "Mission" or strategic prompts.
+- No extra sections. No renamed sections. No meta commentary.
+- Output language: generate all text in **{output_language}** only.
+
+5. Math & Symbol Rules
+- Inline math: $...$
+- Display math: $$...$$
+- Never use code blocks for math. Use \\\\ for LaTeX backslashes in strings.
+- Use \\text{{}} inside LaTeX for units if applicable.
+- Recalculate all numerical examples before finalizing. Do not invent values.
+
+6. Structural Discipline
+- Generate ONLY the requested section (or outline when asked).
+- Do not preview other sections. Do not summarize future sections. Do not add filler.
+
+7. Analogy Rule (Section 1 only)
+- Include exactly ONE relatable analogy. Include exactly ONE real-world "Why" explanation.
+- Do not repeat the same reasoning elsewhere.
+
+8. Error Handling Rule
+- Use provided common_errors exactly as given. Expand them into specific, actionable corrections.
+- If error is "No_Answer", provide blank-page strategy and partial-credit method.
+
+9. Misconceptions Rule
+Each must include: Misconception, Fact (subject-correct), Why (brief explanation).
+
+10. Self-Verification Before Output
+Silently check: Definitions correct for Subject? Examples grade-appropriate? Formulas correct? Headings correct? Section requirements followed exactly? If anything is incorrect, fix before finalizing.
+"""
+
+    def _normalize_study_guide_input(
+        self,
+        *,
+        subject: str,
+        concept_name: str,
+        focus_area: str,
+        grade_level: Optional[str],
+        concept_info: Optional[Dict],
+        common_errors: List[str],
+        misconceptions: List[str],
+        sample_questions: List[Dict],
+        topic_from_test: Optional[str],
+        topics_from_test: List[str],
+        output_language: str,
+        cultural_block: str,
+    ) -> Dict[str, Any]:
+        """Step 0: Validate and normalize all inputs before pipeline."""
+        subject = (subject or "").strip()
+        if not subject:
+            raise ValueError("Study guide requires subject.")
+        topic_or_subtopic = (topic_from_test or "").strip() if topic_from_test else None
+        if not topic_or_subtopic and topics_from_test:
+            topic_or_subtopic = next((str(t).strip() for t in topics_from_test if t and str(t).strip()), None)
+        if not topic_or_subtopic:
+            raise ValueError("Study guide requires topic_from_test or non-empty topics_from_test.")
+
+        topics_list: List[str] = []
+        if topics_from_test:
+            topics_list.extend(t for t in topics_from_test if t and str(t).strip())
+        if concept_name and concept_name not in topics_list:
+            topics_list.insert(0, concept_name)
+        if concept_info:
+            kw = concept_info.get("keywords")
+            if isinstance(kw, list) and kw:
+                topics_list.extend(str(k).strip() for k in kw[:10] if k and str(k).strip())
+            elif isinstance(kw, str) and kw.strip():
+                topics_list.append(kw.strip())
+        if not topics_list:
+            topics_list = [concept_name]
+
+        valid_errors = [
+            e for e in (common_errors or [])
+            if e and isinstance(e, str) and e.strip() and e.lower() not in ("none", "null", "")
+        ]
+        valid_misconceptions = [m for m in (misconceptions or []) if m and isinstance(m, str) and m.strip()]
+        sample_questions = sample_questions or []
+        if not isinstance(sample_questions, list):
+            sample_questions = []
+
+        grade_level = (grade_level or "").strip() or "Middle School"
+        output_language = (output_language or "English").strip() or "English"
+
+        concept_anchor = ""
+        if concept_info:
+            sm = concept_info.get("source_markdown", "")
+            if isinstance(sm, str) and sm:
+                concept_anchor = sm[:1200]
+
+        return {
+            "subject": subject,
+            "concept_name": concept_name,
+            "focus_area": focus_area,
+            "grade_level": grade_level,
+            "topic_or_subtopic": topic_or_subtopic,
+            "topics_list": topics_list,
+            "concept_info": concept_info,
+            "concept_anchor": concept_anchor,
+            "common_errors": valid_errors,
+            "misconceptions": valid_misconceptions,
+            "sample_questions": sample_questions[:5],
+            "output_language": output_language,
+            "cultural_block": cultural_block or "",
+        }
+
+    def _build_outline_prompt(self, normalized: Dict[str, Any]) -> str:
+        """Prompt for Step 1: outline only (headings + bullet outline)."""
+        parts = [
+            "Generate ONLY the required Section 1–8 headings and a short bullet outline.",
+            "No explanations. No examples. No filler.",
+            "",
+            f"Subject: {normalized.get('subject', '')}",
+            f"Concept: {normalized.get('concept_name', '')}",
+            f"Focus Area: {normalized.get('focus_area', '')}",
+            f"Topics to cover: {', '.join(normalized.get('topics_list', [])[:12])}",
+            "",
+            "Required headings (use exactly these titles):",
+        ]
+        for h in SECTION_HEADINGS:
+            parts.append(f"- {h}")
+        parts.append("")
+        parts.append("Output: list each section heading followed by 2–4 bullet points outlining what that section will cover. Nothing else.")
+        return "\n".join(str(p) for p in parts)
+
+    def _build_section_requirements_text(self) -> str:
+        """Full section requirements text for inclusion in section prompts."""
+        return """
+## Section 1: Concept Foundation
+- Start the document with a single H1 title (the concept or focus area name), then Section 1 content.
+- Give a correct, subject-specific definition of the concept (and any core terms). Do not use definitions from another discipline.
+- Define the concept using exactly ONE relatable analogy (e.g. explaining Inertia with a skateboard). Do NOT add a separate heading for the analogy—it belongs in Section 1.
+- In the same section, explain the 'Why' in one place: How does this make the world work? (Real-world context). Do not repeat elsewhere.
+
+## Section 2: Core Principles & Formulas
+- Break down the theory into bite-sized principles. Use subject-correct definitions for every term and formula.
+- Formulas: Provide the formula, then a bulleted list 'Legend' explaining every variable. Use display math ($$) for primary equations.
+
+## Section 3: The Systematic Problem-Solving Protocol
+- Create a numbered 'Universal Strategy' that applies to any problem in this concept. Include a 'Self-Question' step.
+
+## Section 4: Worked Examples (Increasing Complexity)
+- Minimum 3 examples: Entry-Level, Intermediate, Challenge/Multi-step. For each: Problem, 'The Logic', then Step-by-Step Solution. High-quality LaTeX for every step.
+
+## Section 5: The Pitfall Audit (Addressing Student Errors)
+- Directly address the specific errors provided in the context. For each: Label the mistake, explain the 'Logic Trap', provide the 'Correction'. If No_Answer errors: provide First-Step Strategy and partial-credit method.
+
+## Section 6: Misconceptions Debunked
+- For each item: **Misconception:** (wrong belief), **Fact:** (correct statement), **Why:** (brief explanation). Every Fact must be correct for the stated Subject and topic.
+
+## Section 7: Practice Quest (Guided Practice)
+- Provide 3–5 problems. Do not give full solution; provide Checkpoints (e.g. 'After Step 1, your value for X should be ...').
+
+## Section 8: Summary & Quick Reference Sheet
+- A Markdown table of all Formulas, Units, and Key Rules. A 'One-Minute Review' bulleted list of vital takeaways.
+"""
+
+    def _build_section_prompt(
+        self,
+        normalized: Dict[str, Any],
+        section_number: int,
+        outline: str,
+        previous_sections: str,
+    ) -> str:
+        """Build user prompt for generating a single section (Step 2)."""
+        if section_number < 1 or section_number > NUM_SECTIONS:
+            raise ValueError(f"section_number must be 1..{NUM_SECTIONS}")
+        heading = SECTION_HEADINGS[section_number - 1]
+        parts = [
+            f"Generate Section {section_number} only: **{heading}**.",
+            "Follow the required structure for this section exactly. Do not generate any other section.",
+            "",
+            "--- Outline for this guide (follow it) ---",
+            outline.strip(),
+            "--- End outline ---",
+            "",
+        ]
+        if previous_sections:
+            parts.append("--- Previously generated sections (for continuity only; do not repeat) ---")
+            parts.append(previous_sections[:3000])
+            parts.append("--- End previous ---")
+            parts.append("")
+
+        parts.extend([
+            f"Subject: {normalized.get('subject', '')}",
+            f"Concept: {normalized.get('concept_name', '')}",
+            f"Focus Area: {normalized.get('focus_area', '')}",
+            f"Grade Level: {normalized.get('grade_level', '')}",
+            f"Topics: {', '.join(normalized.get('topics_list', [])[:12])}",
+            "",
+        ])
+        if normalized.get("concept_anchor"):
+            parts.extend([
+                "--- Concept information (from learning material) ---",
+                normalized["concept_anchor"],
+                "",
+            ])
+        if section_number == 5 and normalized.get("common_errors"):
+            parts.extend([
+                "--- Common errors to address in this section ---",
+                *[f"- {e}" for e in normalized["common_errors"]],
+                "",
+            ])
+        if section_number == 6 and normalized.get("misconceptions"):
+            parts.extend([
+                "--- Misconceptions to debunk (use in Section 6) ---",
+                *[f"- {m}" for m in normalized["misconceptions"]],
+                "",
+            ])
+        if section_number == 4 and normalized.get("sample_questions"):
+            parts.append("--- Sample problem questions (use to tailor examples) ---")
+            for i, q in enumerate(normalized["sample_questions"][:3], 1):
+                text = (q.get("text") or "")[:200] if isinstance(q.get("text"), str) else ""
+                parts.append(f"{i}. {text}")
+            parts.append("")
+
+        parts.append("--- Section requirements (for this section only) ---")
+        parts.append(self._build_section_requirements_text())
+        return "\n".join(str(p) for p in parts)
+
+    async def _generate_outline(self, normalized: Dict[str, Any]) -> str:
+        """Step 1: Generate outline only."""
+        context_block = self._build_context_block(normalized)
+        system_prompt = self._get_master_system_prompt(context_block, normalized["output_language"])
+        user_prompt = self._build_outline_prompt(normalized)
+        response = await self.llm_service.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=STUDY_GUIDE_GEN_TEMPERATURE,
+            max_tokens=STUDY_GUIDE_OUTLINE_MAX_TOKENS,
+            top_p=STUDY_GUIDE_TOP_P,
+            repeat_penalty=STUDY_GUIDE_REPEAT_PENALTY,
+        )
+        text = (response.get("text") or response.get("content") or "").strip()
+        if not text or len(text) < 20:
+            raise ValueError("LLM returned insufficient outline.")
+        return text
+
+    async def _generate_section(
+        self,
+        normalized: Dict[str, Any],
+        section_number: int,
+        outline: str,
+        previous_sections: str,
+    ) -> str:
+        """Step 2: Generate one section only."""
+        context_block = self._build_context_block(normalized)
+        system_prompt = self._get_master_system_prompt(context_block, normalized["output_language"])
+        user_prompt = self._build_section_prompt(normalized, section_number, outline, previous_sections)
+        response = await self.llm_service.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=STUDY_GUIDE_GEN_TEMPERATURE,
+            max_tokens=STUDY_GUIDE_SECTION_MAX_TOKENS,
+            top_p=STUDY_GUIDE_TOP_P,
+            repeat_penalty=STUDY_GUIDE_REPEAT_PENALTY,
+        )
+        text = (response.get("text") or response.get("content") or "").strip()
+        if not text or len(text) < 30:
+            logger.warning(f"Section {section_number} returned short content ({len(text) if text else 0} chars)")
+        return text or f"\n## {SECTION_HEADINGS[section_number - 1]}\n\n(Content unavailable.)\n"
+
+    def _document_has_all_sections(self, text: str) -> bool:
+        """Return True if text contains at least 6 of the 8 section headings (allows minor rephrasing)."""
+        if not text:
+            return False
+        count = sum(1 for h in SECTION_HEADINGS if h in text or h.replace(" & ", " and ") in text)
+        return count >= 6
+
+    async def _validate_guide_content(self, document: str, normalized: Dict[str, Any]) -> str:
+        """Step 3: Subject and structure validation pass. Fix only if needed."""
+        context_block = self._build_context_block(normalized)
+        doc_len = min(len(document), STUDY_GUIDE_DOCUMENT_MAX_CHARS)
+        system_prompt = (
+            "You are a fact and structure checker for educational content. "
+            "Verify: (1) All definitions are correct for the stated Subject. "
+            "(2) No cross-discipline mixing. (3) Grade-level appropriate depth. "
+            "(4) No advanced-level drift. (5) All math/examples correct. (6) Section rules followed. "
+            "Fix only errors. Do not change correct content. "
+            "CRITICAL: Your reply must be the COMPLETE study guide—every section from start to end. "
+            "Do NOT summarize, truncate, or return only one section. "
+            "Your output length must be similar to the input (thousands of characters). Copy the full document and apply only minimal fixes."
+        )
+        doc_slice = document[:STUDY_GUIDE_DOCUMENT_MAX_CHARS]
+        user_prompt = f"""
+{context_block}
+
+Check the study guide below and fix only definition, grade-level, or structural errors. Return the ENTIRE guide with fixes applied—do not shorten it.
+Required: Your response must include all 8 sections and be at least {doc_len} characters. Do not stop after one section.
+
+--- Document to verify (return this full document with only small fixes) ---
+
+{doc_slice}
+
+--- End document ---
+
+Remember: Reply with the COMPLETE document above, with only necessary corrections. Do not truncate."""
+        response = await self.llm_service.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=STUDY_GUIDE_VALIDATION_TEMPERATURE,
+            max_tokens=STUDY_GUIDE_VALIDATION_MAX_TOKENS,
+        )
+        text = (response.get("text") or response.get("content") or "").strip()
+        if not text or len(text) < 100:
+            return document
+        # Safeguard: if model returned much less content or dropped sections, keep original
+        if len(text) < 0.5 * len(document) or not self._document_has_all_sections(text):
+            logger.warning(
+                "Validation pass returned shortened or incomplete guide (len=%s, sections ok=%s); keeping original",
+                len(text), self._document_has_all_sections(text),
+            )
+            return document
+        return text
+
+    async def _pedagogical_pass(self, document: str, normalized: Dict[str, Any]) -> str:
+        """Step 4 (optional): Improve tone and clarity without changing structure."""
+        context_block = self._build_context_block(normalized)
+        doc_len = min(len(document), STUDY_GUIDE_DOCUMENT_MAX_CHARS)
+        system_prompt = (
+            "You are an educational editor. Improve tone (encouraging), clarity, and actionability. "
+            "Do NOT change structure, headings, or section order. Do NOT add or remove sections. "
+            "CRITICAL: Your reply must be the COMPLETE study guide—every section from start to end. "
+            "Do NOT summarize or truncate. Your output length must be similar to the input. Return the full guide with only clarity/tone improvements."
+        )
+        doc_slice = document[:STUDY_GUIDE_DOCUMENT_MAX_CHARS]
+        user_prompt = f"""
+{context_block}
+
+Improve the study guide below for tone and clarity only. Keep all sections and structure unchanged. Return the ENTIRE guide—do not shorten it.
+Required: Your response must include all 8 sections and be at least {doc_len} characters. Do not stop after one section.
+
+--- Document (return this full document with only tone/clarity edits) ---
+
+{doc_slice}
+
+--- End ---
+
+Remember: Reply with the COMPLETE document above, with only minor tone/clarity improvements. Do not truncate."""
+        response = await self.llm_service.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=STUDY_GUIDE_VALIDATION_TEMPERATURE,
+            max_tokens=STUDY_GUIDE_VALIDATION_MAX_TOKENS,
+        )
+        text = (response.get("text") or response.get("content") or "").strip()
+        if not text or len(text) < 100:
+            return document
+        # Safeguard: if model returned much less content or dropped sections, keep original
+        if len(text) < 0.5 * len(document) or not self._document_has_all_sections(text):
+            logger.warning(
+                "Pedagogical pass returned shortened or incomplete guide (len=%s, sections ok=%s); keeping original",
+                len(text), self._document_has_all_sections(text),
+            )
+            return document
+        return text
+
+    async def _generate_guide_content_pipeline(
+        self,
+        normalized: Dict[str, Any],
+        run_validation_pass: bool = False,
+        pedagogical_pass: bool = False,
+    ) -> str:
+        """Run Zoria pipeline: outline -> sections 1..8 -> optional validation -> optional pedagogical pass.
+        Validation/pedagogical are off by default because many models truncate when asked to return the full document."""
+        logger.info("Study guide pipeline: generating outline")
+        outline = await self._generate_outline(normalized)
+        logger.info("Study guide pipeline: outline received")
+
+        sections: List[str] = []
+        for i in range(1, NUM_SECTIONS + 1):
+            logger.info(f"Study guide pipeline: generating section {i}/{NUM_SECTIONS}")
+            previous = "\n\n".join(sections) if sections else ""
+            section_text = await self._generate_section(normalized, i, outline, previous)
+            sections.append(section_text)
+
+        combined = "\n\n".join(sections)
+        if run_validation_pass:
+            logger.info(
+                "Study guide pipeline: combined %s sections (%s chars), running validation pass",
+                len(sections), len(combined),
+            )
+            combined = await self._validate_guide_content(combined, normalized)
+        else:
+            logger.info("Study guide pipeline: combined %s sections (%s chars), skipping validation pass", len(sections), len(combined))
+        if pedagogical_pass:
+            logger.info("Study guide pipeline: running pedagogical pass")
+            combined = await self._pedagogical_pass(combined, normalized)
+        return combined
+
     async def generate_study_guide(
         self,
         child_id: str,
@@ -179,69 +684,37 @@ class StudyGuideService:
         child_ctx = await get_child_context(child_id=child_id, language_override=language)
         output_language = (child_ctx.get("language") or "English").strip() or "English"
         cultural_block = child_ctx.get("prompt_block") or ""
-        
-        # Build prompt for study guide generation
-        prompt = self._build_study_guide_prompt(
+
+        # Step 0: Normalize inputs
+        normalized = self._normalize_study_guide_input(
+            subject=subject,
             concept_name=concept_name,
             focus_area=focus_area,
             grade_level=grade_level,
-            subject=subject,
             concept_info=concept_info,
             common_errors=common_errors or [],
             misconceptions=misconceptions or [],
             sample_questions=sample_questions or [],
             topic_from_test=topic_from_test,
             topics_from_test=topics_from_test or [],
+            output_language=output_language,
+            cultural_block=cultural_block,
         )
-        
-        system_prompt = f"""
-        You are an expert educational tutor. Your task is to generate a DETAILED, COMPREHENSIVE study guide in Markdown. 
-Follow the REQUIRED CONTENT STRUCTURE (Section 1 through Section 8) given in the user message exactly so the guide renders correctly.
 
-## 0. OUTPUT LANGUAGE AND PREFERENCES
-Generate the ENTIRE study guide in **{output_language}** only: all section titles, explanations, analogies, step-by-step content, examples, pitfall descriptions, cheat sheet text, and mastery check. Keep LaTeX and math notation unchanged. If the language is a code (e.g. en, hi, es), use the corresponding full language (English, Hindi, Spanish, etc.).
-{f'''
-## 0b. CULTURAL / CONTEXT PREFERENCES
-{cultural_block}
-''' if cultural_block else ''}
-
-## 1. STRUCTURAL DIRECTIVES
-- **Tone**: Professional, encouraging, and clear (Middle School level).
-- **LaTeX**: Use double-backslashes for all math (e.g., `\\vec{{F}} = ma`). Write display math as $$...$$ and inline math as $...$ directly in the paragraph—do NOT wrap them in ```latex or ``` code blocks, or the UI will not render the math.
-- **Formatting**: Use Bold for key terms and Blockquotes for "Missions."
-
-## 2. CONTENT STRUCTURE (MUST FOLLOW)
-You MUST use the exact "REQUIRED CONTENT STRUCTURE" (Section 1 through Section 8) provided in the user message below. Do NOT use alternate section titles such as "Concept Snapshot", "Zoria Analogy", "Your Quest Map", or "Zoria's Lab". In Section 1 (Concept Foundation) only:
-- Include exactly one relatable analogy to define the concept (e.g., explaining inertia with a skateboard). Do NOT add a separate subsection or heading called "Zoria Analogy"; the analogy belongs in Section 1.
-- Include exactly one "Why" explanation (how this makes the world work / real-world context). Do not repeat the same idea in multiple places.
-
-## 3. DEFINITIONS (CORE CONCEPT)
-All definitions in the study guide must be correct for the stated Subject (e.g. Physics, Mathematics, Biology). Use standard, curriculum-appropriate definitions for that discipline. Do not swap or mix definitions between related terms (e.g. speed vs velocity, force vs pressure). If the user message provides "Concept Information" from the learning material, use it to anchor the core concept definition.
-"""
-        
-        # Generate study guide using LLM
+        # Generate study guide via Zoria pipeline (outline -> sections 1..8; validation/pedagogical skipped to avoid model truncation)
         try:
-            logger.info(f"Calling LLM to generate study guide for {concept_name}")
-            response = await self.llm_service.generate(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                max_tokens=4000,  # Increased significantly for comprehensive guides
-                temperature=0.7
+            logger.info(f"Calling study guide pipeline for {concept_name}")
+            content = await self._generate_guide_content_pipeline(
+                normalized,
+                run_validation_pass=False,
+                pedagogical_pass=False,
             )
-            
-            logger.info(f"LLM response received, type: {type(response)}")
-            
-            # Extract content from response (returns dict with 'text' key)
-            if isinstance(response, dict):
-                content = response.get('text', '') or response.get('content', '') or str(response)
-            else:
-                content = str(response)
             content = _normalize_study_guide_revision_latex(content) or content
-            
+
             if not content or len(content.strip()) < 50:
-                raise ValueError(f"LLM returned insufficient content: {len(content) if content else 0} characters")
-            
-            logger.info(f"Extracted content length: {len(content)} characters")
+                raise ValueError(f"Pipeline returned insufficient content: {len(content) if content else 0} characters")
+
+            logger.info(f"Pipeline content length: {len(content)} characters")
             
             # Use empty arrays - the markdown content already contains all information
             # No need for intermediate JSON extraction since markdown is the source of truth
@@ -261,11 +734,8 @@ All definitions in the study guide must be correct for the stated Subject (e.g. 
             
             # Save study guide to database
             logger.info("Saving study guide to database")
-            # Filter out None, empty, or invalid common errors before saving
-            valid_common_errors = []
-            if common_errors:
-                valid_common_errors = [e for e in common_errors if e and isinstance(e, str) and e.strip() and e.lower() not in ['none', 'null', '']]
-            logger.info(f"Saving {len(valid_common_errors)} valid common errors (filtered from {len(common_errors) if common_errors else 0} total)")
+            valid_common_errors = normalized.get("common_errors", [])
+            logger.info(f"Saving {len(valid_common_errors)} valid common errors")
             
             # When force_regenerate is True, check for existing guide to update
             replace_existing = False
@@ -308,7 +778,7 @@ All definitions in the study guide must be correct for the stated Subject (e.g. 
                 subject=subject,
                 key_points=structured_data.get('key_points', []),
                 practice_recommendations=structured_data.get('practice_recommendations', []),
-                common_errors=valid_common_errors,
+                common_errors=normalized.get("common_errors", []),
                 related_concepts=structured_data.get('related_concepts', []),
                 test_id=test_id,
                 replace_existing=replace_existing,
@@ -324,7 +794,7 @@ All definitions in the study guide must be correct for the stated Subject (e.g. 
                 'content': content,
                 'key_points': structured_data.get('key_points', []),
                 'practice_recommendations': structured_data.get('practice_recommendations', []),
-                'common_errors': valid_common_errors,
+                'common_errors': normalized.get("common_errors", []),
                 'related_concepts': structured_data.get('related_concepts', []),
                 'is_new': True
             }
@@ -596,6 +1066,22 @@ All definitions in the study guide must be correct for the stated Subject (e.g. 
             if topic:
                 scope_parts.append(f"Topic: {topic}")
             scope_line = "\n".join([f"- {p}" for p in scope_parts]) + "\n\n"
+
+        # Truncate content so system + user prompt + response fit in model context; cut at newline to avoid mid-sentence
+        content_for_cards = content
+        if len(content) > REVISION_CARDS_CONTENT_MAX_CHARS:
+            cap = REVISION_CARDS_CONTENT_MAX_CHARS
+            cut = content[:cap]
+            last_nl = cut.rfind("\n")
+            if last_nl > cap // 2:
+                content_for_cards = cut[: last_nl + 1].rstrip()
+            else:
+                content_for_cards = cut.rstrip()
+            content_for_cards += "\n\n[Study guide truncated for length; extract cards from the sections above.]"
+            logger.info(
+                "Revision cards: truncated study guide from %s to %s chars so prompt fits context",
+                len(content), len(content_for_cards),
+            )
         prompt = f"""
 Extract revision cards from this study guide. Write ALL card "front" and "back" text in **{output_lang}** only. Keep LaTeX and math unchanged.
 
@@ -604,13 +1090,15 @@ Concept: {concept_name}
 {scope_line}
 **Study guide content:**
 
-{content}
+{content_for_cards}
 
 ### TASK: Structural Content Extraction
-Review the provided text and generate:
+Review the provided text and generate MULTIPLE cards (do not stop after one card):
 1. **5-8 Definitions**: Focus on fundamental terms found in Sections 1 and 2.
 2. **5-8 Formulas**: Extract core equations. Use LaTeX.
 3. **3-5 Procedural Examples**: Extract full problems and all steps from Sections 4 or 7.
+
+You MUST output at least 10 cards total (e.g. 5 definitions + 3 formulas + 2 procedural minimum). Aim for 13–20 cards when the guide has enough content.
 
 ### OUTPUT RULES:
 - If a problem in the text has a calculation error or uses an incorrect formula for the given variables, correct it in the card output.
@@ -618,14 +1106,14 @@ Review the provided text and generate:
 - Use actual newlines (\n) to separate steps, NOT escaped backslashes.
 - Remove any [LaTeX] markers - just include the actual LaTeX formulas.
 - CRITICAL: For sample problems, include the COMPLETE problem statement in the "front" field - do NOT truncate with "..." or ellipsis. Include all given values and what is being asked.
-- CRITICAL: Return a JSON ARRAY of cards, starting with [ and ending with ]. Do NOT return a single object.
+- CRITICAL: Return a JSON ARRAY of cards, starting with [ and ending with ]. Do NOT return a single object. Output the COMPLETE array of all cards; do not truncate the list.
 
 ### LaTeX RULES (cards are rendered with KaTeX):
 - In JSON string values use DOUBLE backslash before every LaTeX command: write \\\\frac, \\\\text, \\\\vec, \\\\Delta (so after JSON parsing the card gets one backslash: \\frac, \\text, etc.). A single backslash in JSON (e.g. \\f) becomes a control character and breaks the formula.
 - KaTeX only supports \\Delta and \\delta for Greek letters; do NOT use \\textDelta or \\textdelta (they will not render).
 - For units inside math use \\\\text{{...}}: e.g. $10 \\\\text{{ m/s}}$ or $v = 5 \\\\text{{ m/s}}$.
 - Close every math block: each $ with $, each $$ with $$, and each \\\\[ with \\\\].
-- Inline math: $...$. Display math: $$...$$ or \\\\[...\\\\].
+- Inline math: wrap every formula in $...$ (e.g. $v_f = v_i + (a) \\cdot t$). Display math: $$...$$ or \\\\[...\\\\]. Do NOT leave formulas as plain text like v_f = v_i (underscores break in the UI).
 
 ### OUTPUT JSON EXAMPLE:
 [
@@ -667,11 +1155,11 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
 ## 2. FORMATTING & JSON SAFETY (CRITICAL)
 - **JSON Structure**: Output a RAW JSON ARRAY only. 
   - **MUST start with `[` and end with `]`** - This is an array, not a single object.
-  - **Do NOT return a single card object** - Always return an array, even if it has only one card.
+  - **Do NOT return a single card object** - Always return an array of at least 10 cards (5–8 definitions + 5–8 formulas + 3–5 procedural). You have enough token budget to output all of them; do not stop after one or two cards.
   - Do NOT wrap the array in a "cards" key. 
   - Do NOT include markdown code blocks (```json).
-- **LaTeX in JSON**: In JSON string values, backslashes must be escaped. Write `\\\\frac`, `\\\\text`, `\\\\vec`, `\\\\Delta` (double backslash) so that after JSON parsing the card text contains single backslashes (e.g. \\frac). Using a single backslash in JSON (e.g. \\f) can be interpreted as a control character and break the formula.
-- **KaTeX compatibility**: Use \\Delta and \\delta for Greek letters (not \\textDelta or \\textdelta). Use \\text{{...}} for units inside math (e.g. \\text{{ m/s}}). Close every $ with $ and every \\[ with \\].
+- **LaTeX in JSON**: In JSON string values, backslashes must be escaped. Write `\\\\frac`, `\\\\text`, `\\\\vec`, `\\\\Delta` (double backslash) so that after JSON parsing the card text contains single backslashes (e.g. \\frac). Never use \\t, \\n, or \\f in the JSON string for formatting—they become control characters (tab, newline, form feed) and break formulas. Use literal spaces and actual newlines only where intended.
+- **KaTeX compatibility**: Use \\Delta and \\delta for Greek letters (not \\textDelta or \\textdelta). Use \\text{{...}} for units inside math (e.g. \\text{{ m/s}}). Close every $ with $ and every \\[ with \\. Always wrap formulas in $...$ or $$...$$ (e.g. $v_f = v_i + a t$); never leave subscripted math as plain v_f or v_i (underscores break rendering).
 - **Newlines**: Use actual newline characters `\\n` in the JSON string to separate steps in the "back" field.
 - **Step Formatting**: For step-by-step solutions, use DOUBLE newlines between each numbered step (Step 1, Step 2, etc.) for clear visual separation.
 - **Clean Output**: Remove any [LaTeX] markers or placeholder text - include only actual LaTeX formulas.
@@ -685,7 +1173,7 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
             response = await self.llm_service.generate_json(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                max_tokens=4000  # Increased to allow longer, more detailed revision cards
+                max_tokens=REVISION_CARDS_MAX_TOKENS,
             )
             
             logger.info(f"LLM response type for revision cards: {type(response)}")
@@ -965,12 +1453,18 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
                         logger.warning(f"Failed to parse metadata JSON: {e}")
                         guide_dict['metadata'] = {}
                 if isinstance(guide_dict.get('metadata'), dict) and 'revision_cards' in guide_dict['metadata']:
-                    cards = guide_dict['metadata']['revision_cards']
-                    logger.info(f"Found {len(cards)} revision cards in metadata; normalizing LaTeX for display")
-                    for c in cards:
+                    raw_cards = guide_dict['metadata']['revision_cards']
+                    logger.info(f"Found {len(raw_cards)} revision cards in metadata; normalizing LaTeX for display")
+                    normalized_cards = []
+                    for c in raw_cards:
                         if isinstance(c, dict) and 'front' in c and 'back' in c:
-                            c['front'] = normalize_revision_card_latex(c.get('front') or '')
-                            c['back'] = normalize_revision_card_latex(c.get('back') or '')
+                            normalized_cards.append({
+                                'front': normalize_revision_card_latex(c.get('front') or ''),
+                                'back': normalize_revision_card_latex(c.get('back') or ''),
+                            })
+                        else:
+                            normalized_cards.append(dict(c) if isinstance(c, dict) else c)
+                    guide_dict['metadata'] = {**guide_dict['metadata'], 'revision_cards': normalized_cards}
             else:
                 logger.debug("No metadata found in guide")
             return guide_dict
@@ -982,14 +1476,14 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
         concept_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get all study guides for a child.
-        Returns only the most recent guide for each concept/focus_area combination.
+        Returns only the most recent guide per subject/topic (one per concept_name).
         
         Args:
             child_id: Child UUID
             concept_name: Optional concept name filter
             
         Returns:
-            List of study guide dictionaries (deduplicated)
+            List of study guide dictionaries (one per concept)
         """
         logger.info(f"Fetching study guides for child_id: {child_id}, concept_name: {concept_name}")
         
@@ -1006,30 +1500,30 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
             return []
         
         try:
-            # Get only the most recent guide for each concept/focus_area combination
+            # One guide per subject/topic: most recent per concept_name
             if concept_name:
                 guides = await self.db.fetch(
                     """
-                    SELECT DISTINCT ON (concept_name, focus_area) *
+                    SELECT DISTINCT ON (concept_name) *
                     FROM study_guides
                     WHERE child_id = $1 AND concept_name = $2
-                    ORDER BY concept_name, focus_area, generated_at DESC
+                    ORDER BY concept_name, generated_at DESC
                     """,
                     child_id, concept_name
                 )
             else:
                 guides = await self.db.fetch(
                     """
-                    SELECT DISTINCT ON (concept_name, focus_area) *
+                    SELECT DISTINCT ON (concept_name) *
                     FROM study_guides
                     WHERE child_id = $1
-                    ORDER BY concept_name, focus_area, generated_at DESC
+                    ORDER BY concept_name, generated_at DESC
                     """,
                     child_id
                 )
             
-            logger.info(f"Found {len(guides)} unique study guides for child {child_id} (deduplicated by concept/focus_area)")
-            # Parse metadata for each guide
+            logger.info(f"Found {len(guides)} study guides for child {child_id} (one per subject/topic)")
+            # Parse metadata for each guide and normalize revision card LaTeX (same as get_study_guide)
             result = []
             for g in guides:
                 guide_dict = dict(g)
@@ -1040,6 +1534,18 @@ Generate ALL "front" and "back" text for every card in **{output_lang}** only. K
                             guide_dict['metadata'] = json.loads(guide_dict['metadata'])
                         except (json.JSONDecodeError, TypeError):
                             guide_dict['metadata'] = {}
+                    if isinstance(guide_dict.get('metadata'), dict) and 'revision_cards' in guide_dict['metadata']:
+                        raw_cards = guide_dict['metadata']['revision_cards']
+                        normalized_cards = []
+                        for c in raw_cards:
+                            if isinstance(c, dict) and 'front' in c and 'back' in c:
+                                normalized_cards.append({
+                                    'front': normalize_revision_card_latex(c.get('front') or ''),
+                                    'back': normalize_revision_card_latex(c.get('back') or ''),
+                                })
+                            else:
+                                normalized_cards.append(dict(c) if isinstance(c, dict) else c)
+                        guide_dict['metadata'] = {**guide_dict['metadata'], 'revision_cards': normalized_cards}
                 result.append(guide_dict)
             return result
         except Exception as e:

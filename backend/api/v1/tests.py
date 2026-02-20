@@ -662,6 +662,7 @@ async def get_test(
                     answer=q.get('answer') if user_role == "child" or test['status'] == 'completed' else None,
                     score=q.get('score') if test['status'] == 'completed' else None,
                     is_correct=q.get('is_correct') if test['status'] == 'completed' else None,
+                    time_spent_seconds=int(q['time_spent_seconds']) if q.get('time_spent_seconds') is not None else None,
                     detailed_feedback=detailed_feedback,
                     response_metadata=q.get('response_metadata') if isinstance(q.get('response_metadata'), dict) else None
                 )
@@ -1675,10 +1676,14 @@ You act as the navigator for the Learning Drawer. Use these tags to trigger UI c
 ## 5. STUDY GUIDE CONTEXT
 """
     
-    # Add guide content summary
+    # Send as much of the full study guide as fits (so the coach can reference any section)
+    AI_COACH_GUIDE_MAX_CHARS = 18000  # Full 8-section guide typically ~15–20k chars; leave room for system + chat
     if guide.get("content"):
-        content_preview = guide["content"][:1000]  # First 1000 chars
-        prompt += f"\nStudy Guide Content Preview:\n{content_preview}\n"
+        full_content = guide["content"]
+        if len(full_content) <= AI_COACH_GUIDE_MAX_CHARS:
+            prompt += f"\n[STUDY_GUIDE] (complete):\n{full_content}\n"
+        else:
+            prompt += f"\n[STUDY_GUIDE] (first {AI_COACH_GUIDE_MAX_CHARS} chars of {len(full_content)} total):\n{full_content[:AI_COACH_GUIDE_MAX_CHARS]}\n"
     
     # Add context about errors
     if context.get("relatedError"):

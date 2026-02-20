@@ -730,7 +730,17 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
             {activeTab === 'reports' && (
               <div className="dashboard-section" style={{ padding: 0, height: '100vh', overflow: 'hidden' }}>
                 {childProfile ? (
-                  <LearningWorkspace childId={childProfile.id} daysBack={30} showAllGuides={true} user={user} preferredLanguage={childPreferredLanguage} />
+                  <LearningWorkspace
+                  childId={childProfile.id}
+                  daysBack={30}
+                  showAllGuides={true}
+                  user={user}
+                  preferredLanguage={childPreferredLanguage}
+                  onOpenTest={(testId) => {
+                    setActiveTab('tests')
+                    setSelectedTest({ id: testId })
+                  }}
+                />
                 ) : (
                   <div className="empty-state">
                     <p>Loading profile...</p>
@@ -1077,7 +1087,17 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
                       Viewing: <strong style={{ color: 'var(--text-primary)' }}>{childList.find(c => c.id === selectedChild)?.name || 'Child'}</strong>
                     </p>
                   )}
-                  <LearningWorkspace childId={selectedChild} daysBack={30} showAllGuides={true} user={user} preferredLanguage={null} />
+                  <LearningWorkspace
+                    childId={selectedChild}
+                    daysBack={30}
+                    showAllGuides={true}
+                    user={user}
+                    preferredLanguage={null}
+                    onOpenTest={(testId) => {
+                      setActiveTab('tests')
+                      setSelectedTest({ id: testId })
+                    }}
+                  />
                 </>
               ) : childList.length === 0 ? (
                 <div className="empty-state">

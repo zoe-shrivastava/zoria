@@ -555,6 +555,7 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
   }
 
   const handleAnswerChange = async (questionId, answer) => {
+    const now = Date.now()
     const previousAnswer = answers[questionId]
     const isNewAnswer = previousAnswer !== answer
     const newAnswers = { ...answers, [questionId]: answer }
@@ -562,7 +563,6 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
 
     // Update behavioral tracking
     if (!readOnly && started) {
-      const now = Date.now()
       const behavioral = behavioralData[questionId] || {}
       const questionStartTime = behavioral.question_start_time || now
       
@@ -604,38 +604,39 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
     // Auto-save answer with behavioral data
     if (!readOnly && started) {
       try {
-        // Ensure answer is a string (required by API)
-        const answerString = typeof answer === 'string' ? answer : JSON.stringify(answer)
-        
-        // Prepare behavioral data for this question
-        const behavioral = behavioralData[questionId] || {}
-        const confidence = confidenceScores[questionId] || behavioral.confidence_score
-        
-        const behavioralPayload = {
-          latency_ms: behavioral.latency_ms || null,
-          idle_time_ms: behavioral.idle_time_ms || 0,
-          edit_count: behavioral.edit_count || 0,
-          hints_accessed: behavioral.hints_accessed || 0,
-          confidence_score: confidence || null,
-          navigation_actions: Array.isArray(behavioral.navigation_actions) ? behavioral.navigation_actions : []
+        // Ensure answer is a string (required by API); safe serialize to avoid throw before request
+        let answerString
+        try {
+          answerString = typeof answer === 'string' ? answer : JSON.stringify(answer)
+        } catch (serializeErr) {
+          console.error('Answer serialization failed:', serializeErr)
+          showNotification('Answer could not be serialized. Please simplify your answer.', 'error')
+          return
         }
-        
-        console.log('Saving answer with behavioral data:', {
-          questionId,
-          answerType: typeof answer,
-          answerStringLength: answerString.length,
-          behavioralData: behavioralPayload
-        })
-        
-        await tests.answer(testId, questionId, answerString, null, behavioralPayload)
-        console.log('Answer saved successfully:', { 
-          questionId, 
-          answerLength: answerString.length,
-          behavioralData: behavioralPayload
-        })
+        if (answerString === undefined) answerString = ''
+
+        // Prepare behavioral data (plain values only so request body never throws on stringify)
+        const behavioral = behavioralData[questionId] || {}
+        const confidence = confidenceScores[questionId] ?? behavioral.confidence_score
+        const questionStartTime = behavioral.question_start_time || now
+        const timeSpentSeconds = Math.max(0, Math.round((now - questionStartTime) / 1000))
+        const computedLatencyMs = behavioral.question_start_time != null ? now - behavioral.question_start_time : null
+        const navActions = Array.isArray(behavioral.navigation_actions) ? behavioral.navigation_actions : []
+        const behavioralPayload = {
+          latency_ms: behavioral.latency_ms ?? computedLatencyMs,
+          idle_time_ms: Number(behavioral.idle_time_ms) || 0,
+          edit_count: Number(behavioral.edit_count) || 0,
+          hints_accessed: Number(behavioral.hints_accessed) || 0,
+          confidence_score: confidence != null ? Number(confidence) : null,
+          navigation_actions: navActions.filter((a) => typeof a === 'string')
+        }
+
+        await tests.answer(testId, questionId, answerString, timeSpentSeconds, behavioralPayload)
+        console.log('Answer saved successfully:', { questionId, answerLength: answerString.length })
       } catch (error) {
         console.error('Failed to save answer:', error)
-        showNotification('Failed to save answer. Please try again.', 'error')
+        const message = error?.message || String(error)
+        showNotification(message.includes('Failed to save') ? message : `Save failed: ${message}`, 'error')
       }
     }
   }
@@ -680,15 +681,18 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       const answer = answers[currentQ.question_id]
       const answerString = answer !== undefined ? (typeof answer === 'string' ? answer : JSON.stringify(answer)) : ''
       const confidence = confidenceScores[currentQ.question_id] ?? prevBehavioral.confidence_score
+      const qStart = prevBehavioral.question_start_time
+      const timeSpentSeconds = qStart != null ? Math.max(0, Math.round((Date.now() - qStart) / 1000)) : null
+      const computedLatencyMs = qStart != null ? Date.now() - qStart : null
       const payload = {
-        latency_ms: prevBehavioral.latency_ms ?? null,
+        latency_ms: prevBehavioral.latency_ms ?? computedLatencyMs,
         idle_time_ms: prevBehavioral.idle_time_ms ?? 0,
         edit_count: prevBehavioral.edit_count ?? 0,
         hints_accessed: prevBehavioral.hints_accessed ?? 0,
         confidence_score: confidence ?? null,
         navigation_actions: newNav
       }
-      tests.answer(testId, currentQ.question_id, answerString, null, payload).catch(() => {})
+      tests.answer(testId, currentQ.question_id, answerString, timeSpentSeconds, payload).catch(() => {})
     }
     setCurrentQuestionIndex(newIndex)
   }
@@ -1331,6 +1335,34 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
             {question.score !== undefined && ` (${question.score}/${question.max_score} points)`}
           </div>
         )}
+
+        {/* Time taken, edits, hints (completed view - show under each question) */}
+        {isCompleted && (
+          <div style={{
+            marginTop: '0.5rem',
+            fontSize: '0.85rem',
+            color: 'var(--text-muted)',
+            display: 'flex',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}>
+            <span title="Time spent on this question">
+              Time: {(() => {
+                const meta = question.response_metadata || {}
+                const timeSec = question.time_spent_seconds != null ? Number(question.time_spent_seconds) : null
+                const latencyMs = meta.latency_ms != null ? Number(meta.latency_ms) : null
+                const timeTakenSec = timeSec != null ? timeSec : (latencyMs != null ? Math.round(latencyMs / 1000) : null)
+                return timeTakenSec != null ? (timeTakenSec < 60 ? `${timeTakenSec}s` : `${Math.floor(timeTakenSec / 60)}m ${timeTakenSec % 60}s`) : '—'
+              })()}
+            </span>
+            <span title="Number of answer edits">
+              Edits: {question.response_metadata?.edit_count != null ? Number(question.response_metadata.edit_count) : '—'}
+            </span>
+            <span title="Hints used">
+              Hints: {question.response_metadata?.hints_accessed != null ? Number(question.response_metadata.hints_accessed) : '—'}
+            </span>
+          </div>
+        )}
         
         {/* Show correct answer for MCQ */}
         {qShouldShowCorrect && (
@@ -1514,6 +1546,52 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
       {/* Show all questions if completed, otherwise show single question */}
       {isCompleted ? (
         <div>
+          {/* Completed test summary header */}
+          {(() => {
+            const qList = test.questions || []
+            let questionsAnswered = 0
+            let correctCount = 0
+            let partialCount = 0
+            let incorrectCount = 0
+            let totalTimeSec = 0
+            let totalEdits = 0
+            let totalHints = 0
+            qList.forEach((q) => {
+              const hasAnswer = q.answer != null && q.answer !== ''
+              if (hasAnswer) questionsAnswered++
+              if (q.is_correct === true) correctCount++
+              else if (q.score != null && q.max_score != null && q.max_score > 0 && q.score > 0 && q.score < q.max_score) partialCount++
+              else if (q.is_correct === false || (q.score != null && q.score === 0)) incorrectCount++
+              const ts = q.time_spent_seconds != null ? Number(q.time_spent_seconds) : null
+              const lat = q.response_metadata?.latency_ms != null ? Number(q.response_metadata.latency_ms) : null
+              if (ts != null) totalTimeSec += ts
+              else if (lat != null) totalTimeSec += Math.round(lat / 1000)
+              totalEdits += (q.response_metadata?.edit_count != null ? Number(q.response_metadata.edit_count) : 0) || 0
+              totalHints += (q.response_metadata?.hints_accessed != null ? Number(q.response_metadata.hints_accessed) : 0) || 0
+            })
+            const timeStr = totalTimeSec < 60 ? `${totalTimeSec}s` : `${Math.floor(totalTimeSec / 60)}m ${totalTimeSec % 60}s`
+            return (
+              <div style={{
+                marginBottom: '1.5rem',
+                padding: '1.25rem',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+              }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '1rem' }}>Summary</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem 2rem', fontSize: '0.875rem', color: 'var(--text-color)' }}>
+                  <span><strong>Questions Answered:</strong> {questionsAnswered}</span>
+                  <span><strong>Unanswered:</strong> {qList.length - questionsAnswered}</span>
+                  <span><strong>Correct:</strong> {correctCount}</span>
+                  <span><strong>Partially Correct:</strong> {partialCount}</span>
+                  <span><strong>Incorrect:</strong> {incorrectCount}</span>
+                  <span><strong>Total Time:</strong> {timeStr}</span>
+                  <span><strong>Total Edits:</strong> {totalEdits}</span>
+                  <span><strong>Total Hints:</strong> {totalHints}</span>
+                </div>
+              </div>
+            )
+          })()}
           {questions.map((q, idx) => renderQuestion(q, idx, true))}
         </div>
       ) : (
@@ -1992,6 +2070,34 @@ export default function QuizPlayer({ testId, onComplete, readOnly = false, isAdm
           }}>
             {currentQuestion.is_correct ? '✓ Correct' : '✗ Incorrect'} 
             {currentQuestion.score !== undefined && ` (${currentQuestion.score}/${currentQuestion.max_score} points)`}
+          </div>
+        )}
+
+        {/* Time taken, edits, and hints per question (completed test only) - always show row so user sees section */}
+        {isCompleted && (
+          <div style={{
+            marginTop: '0.5rem',
+            fontSize: '0.85rem',
+            color: 'var(--text-muted)',
+            display: 'flex',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}>
+            <span title="Time spent on this question">
+              Time: {(() => {
+                const meta = currentQuestion.response_metadata || {}
+                const timeSec = currentQuestion.time_spent_seconds != null ? Number(currentQuestion.time_spent_seconds) : null
+                const latencyMs = meta.latency_ms != null ? Number(meta.latency_ms) : null
+                const timeTakenSec = timeSec != null ? timeSec : (latencyMs != null ? Math.round(latencyMs / 1000) : null)
+                return timeTakenSec != null ? (timeTakenSec < 60 ? `${timeTakenSec}s` : `${Math.floor(timeTakenSec / 60)}m ${timeTakenSec % 60}s`) : '—'
+              })()}
+            </span>
+            <span title="Number of answer edits">
+              Edits: {currentQuestion.response_metadata?.edit_count != null ? Number(currentQuestion.response_metadata.edit_count) : '—'}
+            </span>
+            <span title="Hints used">
+              Hints: {currentQuestion.response_metadata?.hints_accessed != null ? Number(currentQuestion.response_metadata.hints_accessed) : '—'}
+            </span>
           </div>
         )}
 

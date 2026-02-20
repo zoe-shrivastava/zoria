@@ -7,7 +7,7 @@ import AICoach from './AICoach'
 import { showNotification } from '../utils/notifications'
 import { useLearningContext } from './LearningWorkspace'
 
-export default function EvaluationReport({ childId, daysBack = 30, showAllGuides = false, user = null, isWorkspaceMode = false, preferredLanguage = null }) {
+export default function EvaluationReport({ childId, daysBack = 30, showAllGuides = false, user = null, isWorkspaceMode = false, preferredLanguage = null, onOpenTest = null }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -481,22 +481,43 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
             Inferred from how your child interacted with tests (e.g. time, hints, confidence).
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
-            {session_states.slice(0, 8).map((s, i) => (
-              <span
-                key={s.test_id || i}
-                style={{
-                  padding: '0.25rem 0.5rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'var(--bg-primary)',
-                  border: '1px solid var(--border-color)',
-                  fontSize: '0.8rem',
-                  textTransform: 'capitalize'
-                }}
-                title={s.title || s.completed_at}
-              >
-                {s.inferred_session_state}
-              </span>
-            ))}
+            {session_states.slice(0, 8).map((s, i) => {
+              const clickable = onOpenTest && s.test_id
+              const El = clickable ? 'button' : 'span'
+              const tooltipParts = [s.title || s.completed_at || 'Test']
+              if (s.questions_answered != null) tooltipParts.push(`Questions Answered: ${s.questions_answered}`)
+              if (s.unanswered_count != null) tooltipParts.push(`Unanswered: ${s.unanswered_count}`)
+              if (s.correct_count != null) tooltipParts.push(`Correct: ${s.correct_count}`)
+              if (s.partial_count != null) tooltipParts.push(`Partially Correct: ${s.partial_count}`)
+              if (s.incorrect_count != null) tooltipParts.push(`Incorrect: ${s.incorrect_count}`)
+              if (s.total_time_seconds != null) {
+                const ts = s.total_time_seconds
+                tooltipParts.push(`Total Time: ${ts < 60 ? `${ts}s` : `${Math.floor(ts / 60)}m ${ts % 60}s`}`)
+              }
+              if (s.total_edits != null) tooltipParts.push(`Total Edits: ${s.total_edits}`)
+              if (s.total_hints != null) tooltipParts.push(`Total Hints: ${s.total_hints}`)
+              const tooltip = tooltipParts.join('\n')
+              return (
+                <El
+                  key={s.test_id || i}
+                  type={clickable ? 'button' : undefined}
+                  onClick={clickable ? () => onOpenTest(s.test_id) : undefined}
+                  style={{
+                    padding: '0.25rem 0.5rem',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: '0.8rem',
+                    textTransform: 'capitalize',
+                    cursor: clickable ? 'pointer' : 'default',
+                    font: 'inherit'
+                  }}
+                  title={tooltip}
+                >
+                  {s.inferred_session_state}
+                </El>
+              )
+            })}
           </div>
         </div>
       )}
@@ -1001,23 +1022,37 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
         
         {loadingGuides ? (
           <LoadingSpinner />
-        ) : study_guide_links && study_guide_links.length > 0 ? (
+        ) : (() => {
+          // Show all guides from list API when loaded; otherwise fall back to report links only
+          const generatingPlaceholders = (study_guide_links || []).filter(l => l.generating && !l.guide_id)
+          const hasList = allGuides && allGuides.length > 0
+          const items = hasList
+            ? [
+                ...generatingPlaceholders.map(link => ({ type: 'generating', link })),
+                ...allGuides.map(guide => ({
+                  type: 'guide',
+                  guide,
+                  link: study_guide_links?.find(l => l.guide_id === guide.id) || { concept: guide.concept_name, subject: guide.subject }
+                }))
+              ]
+            : (study_guide_links || []).map(link => ({
+                type: link.generating && !link.guide_id ? 'generating' : 'guide',
+                link,
+                guide: allGuides?.find(g => g.id === link.guide_id) || { id: link.guide_id, concept_name: link.concept, focus_area: link.concept, generated_at: null }
+              }))
+          const hasAny = items.length > 0
+          return hasAny ? (
           <div style={{ 
             display: 'grid', 
             gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
             gap: '0.5rem',
             maxWidth: '100%'
           }}>
-            {study_guide_links.map((link) => {
-              const isGenerating = link.generating && !link.guide_id
-              const guide = allGuides?.find(g => g.id === link.guide_id) || {
-                id: link.guide_id,
-                concept_name: link.concept,
-                focus_area: link.concept,
-                generated_at: null
-              }
-              
-              const subjectName = formatSubjectName(link.concept)
+            {items.map((item, idx) => {
+              const isGenerating = item.type === 'generating'
+              const link = item.link
+              const guide = item.type === 'guide' ? item.guide : (allGuides?.find(g => g.id === link.guide_id) || { id: link.guide_id, concept_name: link.concept, focus_area: link.concept, generated_at: null })
+              const subjectName = formatSubjectName(link.concept || guide.concept_name)
               
               if (isGenerating) {
                 return (
@@ -1066,22 +1101,23 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                 )
               }
               
-              const isRegenerating = regeneratingGuideId === link.guide_id
+              const guideId = guide.id || link.guide_id
+              const isRegenerating = regeneratingGuideId === guideId
               return (
                 <div
-                  key={link.guide_id}
+                  key={isGenerating ? `generating-${link.concept}-${idx}` : guideId}
                   onClick={(e) => {
-                    if (isRegenerating) return
+                    if (isRegenerating || isGenerating) return
                     e.preventDefault()
                     e.stopPropagation()
                     
                     const contextPayload = {
-                      activeTopic: link.concept,
+                      activeTopic: link.concept || guide.concept_name,
                       relatedError: null,
                       navigationState: 'GUIDE',
-                      focusArea: link.concept
+                      focusArea: link.concept || guide.focus_area || guide.concept_name
                     }
-                    handleOpenGuide(link.guide_id, contextPayload)
+                    handleOpenGuide(guideId, contextPayload)
                   }}
                   style={{
                     background: 'var(--bg-secondary)',
@@ -1117,7 +1153,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
                       e.preventDefault()
                       e.stopPropagation()
                       if (isRegenerating) return
-                      handleRegenerateGuide(link.guide_id, e)
+                      handleRegenerateGuide(guideId, e)
                     }}
                     disabled={isRegenerating}
                     style={{
@@ -1235,7 +1271,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               )
             })}
           </div>
-        ) : (
+          ) : (
           <div style={{ 
             padding: '2rem', 
             textAlign: 'center', 
@@ -1246,7 +1282,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
               Study guides are generated automatically when you view your evaluation report.
             </p>
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {/* Learning Drawer - Only render if not in workspace mode */}
