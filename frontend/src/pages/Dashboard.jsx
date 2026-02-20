@@ -567,9 +567,12 @@ export default function Dashboard({ user, onLogout, isAdmin, onNavigateToAdmin }
         window.localStorage.setItem(CHILD_LANGUAGE_STORAGE_KEY, value)
       } catch (_) {}
       try {
-        await child.updateProfile({ preferred_language: value || undefined })
+        const updated = await child.updateProfile({ preferred_language: value || undefined })
+        if (updated) {
+          setChildProfile(updated)
+          setChildPreferredLanguage(updated.preferred_language ?? value)
+        }
       } catch (e) {
-        // Non-blocking; UI already updated
         if (!isAuthError(e)) showNotification('Language saved locally; could not update profile.', 'info')
       }
     }
