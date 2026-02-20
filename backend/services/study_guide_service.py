@@ -1590,13 +1590,13 @@ CRITICAL: Output a JSON ARRAY of at least 10 cards. Start with [ and end with ].
                         raw_cards = [raw_cards]
                     elif not isinstance(raw_cards, list):
                         raw_cards = []
-                    logger.debug(f"Found {len(raw_cards)} revision cards in metadata; normalizing LaTeX for display")
+                    # Return cards as stored; LaTeX is already normalized when saved (do not normalize again on read)
                     normalized_cards = []
                     for c in raw_cards:
                         if isinstance(c, dict) and 'front' in c and 'back' in c:
                             normalized_cards.append({
-                                'front': normalize_revision_card_latex(c.get('front') or ''),
-                                'back': normalize_revision_card_latex(c.get('back') or ''),
+                                'front': (c.get('front') or '').strip(),
+                                'back': (c.get('back') or '').strip(),
                             })
                         else:
                             normalized_cards.append(dict(c) if isinstance(c, dict) else c)
@@ -1677,12 +1677,13 @@ CRITICAL: Output a JSON ARRAY of at least 10 cards. Start with [ and end with ].
                             raw_cards = [raw_cards]
                         elif not isinstance(raw_cards, list):
                             raw_cards = []
+                        # Return cards as stored; LaTeX already normalized when saved (do not normalize again)
                         normalized_cards = []
                         for c in raw_cards:
                             if isinstance(c, dict) and 'front' in c and 'back' in c:
                                 normalized_cards.append({
-                                    'front': normalize_revision_card_latex(c.get('front') or ''),
-                                    'back': normalize_revision_card_latex(c.get('back') or ''),
+                                    'front': (c.get('front') or '').strip(),
+                                    'back': (c.get('back') or '').strip(),
                                 })
                             else:
                                 normalized_cards.append(dict(c) if isinstance(c, dict) else c)
