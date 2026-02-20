@@ -84,17 +84,8 @@ export default function AICoach({
     setIsLoading(true)
 
     try {
-      // If no guideId, Zoria can still help with general questions
       if (!guideId) {
-        // For general questions without a guide, provide a helpful response
-        setTimeout(() => {
-          const generalResponse = {
-            role: 'assistant',
-            content: "I'm Zoria, your AI learning assistant! I can help you understand concepts, solve problems, and guide your learning. If you have a specific topic or question, feel free to ask! You can also open a study guide from your evaluation report to get more focused help on specific concepts."
-          }
-          setMessages(prev => [...prev, generalResponse])
-          setIsLoading(false)
-        }, 500)
+        setIsLoading(false)
         return
       }
 
@@ -502,6 +493,20 @@ export default function AICoach({
                 flexDirection: 'column',
                 gap: '1rem'
               }}>
+                {!guideId && messages.length === 0 && (
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '2rem',
+                    textAlign: 'center',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.95rem'
+                  }}>
+                    <p style={{ margin: 0 }}>Select a study guide from the report to start a conversation with the coach.</p>
+                  </div>
+                )}
                 {messages.map((msg, idx) => {
                   const isUser = msg.role === 'user'
                   
@@ -608,39 +613,51 @@ export default function AICoach({
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Input */}
+              {/* Input - only enabled when a study guide is selected */}
               <div style={{
                 padding: '1rem',
                 borderTop: '1px solid var(--border-color)',
                 background: 'var(--bg-secondary)'
               }}>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <textarea
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder="Ask a question..."
-                    style={{
-                      flex: 1,
-                      padding: '0.75rem',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: 'var(--radius-md)',
-                      resize: 'none',
-                      minHeight: '60px',
-                      maxHeight: '120px',
-                      fontFamily: 'inherit'
-                    }}
-                    disabled={isLoading}
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!inputMessage.trim() || isLoading}
-                    className="btn-primary"
-                    style={{ padding: '0.75rem 1.5rem', alignSelf: 'flex-end' }}
-                  >
-                    Send
-                  </button>
-                </div>
+                {!guideId ? (
+                  <p style={{
+                    margin: 0,
+                    padding: '0.75rem',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.9rem',
+                    textAlign: 'center'
+                  }}>
+                    Select a study guide from the report to start a conversation with the coach.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <textarea
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      placeholder="Ask a question..."
+                      style={{
+                        flex: 1,
+                        padding: '0.75rem',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-md)',
+                        resize: 'none',
+                        minHeight: '60px',
+                        maxHeight: '120px',
+                        fontFamily: 'inherit'
+                      }}
+                      disabled={isLoading}
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!inputMessage.trim() || isLoading}
+                      className="btn-primary"
+                      style={{ padding: '0.75rem 1.5rem', alignSelf: 'flex-end' }}
+                    >
+                      Send
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}

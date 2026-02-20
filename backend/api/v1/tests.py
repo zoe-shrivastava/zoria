@@ -1583,26 +1583,31 @@ async def chat_with_coach(
                 detail="Access denied: You can only chat about your own study guides"
             )
         
-        # Load child context for cultural/context flexibility
+        # Load child context so all profile preferences are always sent to the coach
         child_id_for_ctx = str(guide.get("child_id")) if guide.get("child_id") else None
         from core.child_context import get_child_context
         child_ctx = await get_child_context(child_id=child_id_for_ctx, language_override=language)
         cultural_block = child_ctx.get("prompt_block") or ""
         
-        # Build system prompt for Socratic AI Coach
-        system_prompt = _build_coach_system_prompt(guide, context, language=language, cultural_block=cultural_block)
+        # Build system prompt for Socratic AI Coach (includes all profile preferences)
+        system_prompt = _build_coach_system_prompt(guide, context, language=language, cultural_block=cultural_block, child_ctx=child_ctx)
         
-        # Prepare messages
+        # Effective output language (request override or from child profile)
+        output_lang = (language or child_ctx.get("language") or "English").strip() or "English"
+        language_prefix = f"[Respond only in {output_lang}.]\n\n"
+        
+        # Prepare messages: add language reminder to every user input so the model respects it
         messages = []
         for msg in conversation_history:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
-            })
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user" and content.strip():
+                content = language_prefix + content
+            messages.append({"role": role, "content": content})
         
         messages.append({
             "role": "user",
-            "content": message
+            "content": language_prefix + message
         })
         
         # Call LLM
@@ -1649,21 +1654,37 @@ def _build_coach_system_prompt(
     guide: dict,
     context: dict,
     language: Optional[str] = None,
-    cultural_block: Optional[str] = None
+    cultural_block: Optional[str] = None,
+    child_ctx: Optional[dict] = None
 ) -> str:
-    """Build system prompt for Socratic AI Coach."""
+    """Build system prompt for Socratic AI Coach. All profile preferences are always included."""
     output_lang = (language or "English").strip() or "English"
+    # Always include a profile preferences section so the coach never misses them
+    if child_ctx:
+        parts = [f"Language: {child_ctx.get('language') or output_lang}."]
+        if child_ctx.get("interaction_tone"):
+            parts.append(f"Tone: {child_ctx['interaction_tone']}.")
+        if child_ctx.get("example_preferences"):
+            parts.append(f"Example style: {child_ctx['example_preferences']}.")
+        if child_ctx.get("interests") and str(child_ctx["interests"]).strip():
+            parts.append(f"Child interests (use where relevant): {child_ctx['interests'].strip()}.")
+        if child_ctx.get("sensitive_topics_to_avoid") and str(child_ctx["sensitive_topics_to_avoid"]).strip():
+            parts.append(f"Avoid: {child_ctx['sensitive_topics_to_avoid'].strip()}.")
+        if child_ctx.get("prefer_indirect_guidance"):
+            parts.append("Use indirect, supportive phrasing for emotional or sensitive topics.")
+        prefs_section = " ".join(parts)
+    else:
+        prefs_section = cultural_block if cultural_block else "Use default: English, neutral tone. No other preferences set."
     prompt = f"""# Role: Socratic AI Coach (Llama 3.1)
 You are a brilliant, supportive tutor. Your goal is to guide students to mastery by using the provided **Study Guide** as a topical anchor while utilizing your own vast knowledge to provide analogies, explanations, and practice.
 
 ## 0. OUTPUT LANGUAGE AND SCRIPT
 Respond in **{output_lang}** only. All your messages (explanations, questions, hints, navigation suggestions) must be in {output_lang}. Keep LaTeX and math notation unchanged. If the user writes in another language, you may acknowledge briefly but continue in {output_lang}.
 **CRITICAL - Use the native script, not Roman/Latin transliteration:** For Hindi, write in **Devanagari script** (e.g. आपको, समस्या, मदद), NOT in Roman script (e.g. "Aapko", "samasya", "madad"). For Spanish or English, use standard Latin script. Never respond in Hindi using Romanized/English letters—always use Devanagari (हिंदी) when the language is Hindi.
-{f'''
-
-## 0b. CULTURAL / CONTEXT PREFERENCES
-{cultural_block}
-''' if cultural_block else ''}
+The output language rule has absolute priority over ALL other text, including the Study Guide language.
+Even if the Study Guide is in English, responses MUST be in {output_lang}. Even if user sends messages in another language, you must respond in {output_lang}.
+## 0b. PROFILE PREFERENCES (always apply)
+{prefs_section}
 
 ## 1. THE KNOWLEDGE HIERARCHY
 - **Scope Anchor**: Use the provided `[STUDY_GUIDE]` to identify which topics are "in-bounds." Do not teach advanced concepts (e.g., Relativity) if the guide only covers Classical Mechanics.

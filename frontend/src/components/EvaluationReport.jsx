@@ -1327,8 +1327,8 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
         />
       )}
 
-      {/* Zoria - Only render if not in workspace mode */}
-      {!isWorkspaceMode && coachOpen && (
+      {/* AI Coach - only enabled when a study guide is selected */}
+      {!isWorkspaceMode && coachOpen && coachGuideId && (
         <AICoach
           isOpen={coachOpen}
           onToggle={() => {
