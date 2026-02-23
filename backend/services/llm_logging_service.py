@@ -148,13 +148,13 @@ class LLMLoggingService:
             provider: Provider ('openai', 'ollama')
             model: Model name
             request_type: Request type ('generate', 'chat', 'generate_json', 'agent_run')
-            system_prompt: System prompt (truncated if too long)
-            user_prompt: User prompt
+            system_prompt: Full system prompt
+            user_prompt: Full user prompt
             messages: Conversation messages
             temperature: Temperature parameter
             max_tokens: Max tokens parameter
             other_params: Other parameters
-            response_text: Response text (truncated if too long)
+            response_text: Full response text
             response_metadata: Full response metadata
             success: Whether call succeeded
             error_message: Error message if failed
@@ -173,11 +173,7 @@ class LLMLoggingService:
             Log entry ID or None if logging failed
         """
         try:
-            # Truncate long prompts/responses (keep first 10K chars)
-            system_prompt_truncated = system_prompt[:10000] if system_prompt else None
-            user_prompt_truncated = user_prompt[:10000] if user_prompt else None
-            response_text_truncated = response_text[:10000] if response_text else None
-            
+            # Store full content (DB columns are TEXT; no truncation)
             # Extract token usage from metadata if not provided
             if not prompt_tokens and response_metadata:
                 usage = response_metadata.get("usage") or response_metadata
@@ -245,9 +241,9 @@ class LLMLoggingService:
                 """,
                 call_type, provider, model,
                 request_type,
-                system_prompt_truncated, user_prompt_truncated, messages_json,
+                system_prompt, user_prompt, messages_json,
                 temperature, max_tokens, other_params_json,
-                response_text_truncated, response_metadata_json,
+                response_text, response_metadata_json,
                 success, error_message,
                 prompt_tokens, completion_tokens, total_tokens, cached_tokens,
                 float(costs["input_cost"]), float(costs["cached_input_cost"]), 

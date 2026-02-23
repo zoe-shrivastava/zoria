@@ -56,59 +56,90 @@ async def run_agent_with_logging(
     except Exception as e:
         logger.warning(f"Failed to initialize LLM logging service for agent: {e}")
     
-    # Extract model name from agent
+    # Extract model name and system prompt (instructions) from agent
     model_name = getattr(agent, 'model', 'unknown')
-    
-    # Extract user prompt from input_data
+    system_prompt = getattr(agent, 'instructions', None)
+    if system_prompt is not None:
+        system_prompt = str(system_prompt)
+
+    # Extract user prompt from input_data (support list of messages or single value)
     user_prompt = None
     if isinstance(input_data, list) and len(input_data) > 0:
-        first_item = input_data[0]
-        if isinstance(first_item, dict):
-            content = first_item.get('content', [])
-            if isinstance(content, list) and len(content) > 0:
-                user_prompt = str(content[0].get('file_data', ''))[:1000] if isinstance(content[0], dict) else str(content[0])[:1000]
+        for item in input_data:
+            if isinstance(item, dict) and item.get('role') == 'user':
+                content = item.get('content', [])
+                if isinstance(content, list):
+                    parts = []
+                    for c in content:
+                        if isinstance(c, dict):
+                            if 'text' in c:
+                                parts.append(str(c['text']))
+                            elif 'file_data' in c:
+                                parts.append(str(c['file_data']))
+                        else:
+                            parts.append(str(c))
+                    user_prompt = '\n'.join(parts) if parts else None
+                else:
+                    user_prompt = str(content) if content else None
+                break
+        if user_prompt is None:
+            first_item = input_data[0]
+            if isinstance(first_item, dict):
+                content = first_item.get('content', [])
+                if isinstance(content, list) and len(content) > 0:
+                    c0 = content[0]
+                    user_prompt = (c0.get('text') or str(c0.get('file_data', '')) or str(c0)) if isinstance(c0, dict) else str(c0)
+                else:
+                    user_prompt = str(first_item.get('content', ''))
             else:
-                user_prompt = str(first_item.get('content', ''))[:1000]
-        else:
-            user_prompt = str(input_data)[:1000]
+                user_prompt = str(first_item)
     else:
-        user_prompt = str(input_data)[:1000]
-    
+        user_prompt = str(input_data) if input_data is not None else None
+
     try:
         result = await Runner.run(agent, input=input_data, run_config=run_config)
-        
+
         # Extract information from result
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Try to extract prompt/response from agent result
         response_text = None
         response_metadata = None
-        
+
         if hasattr(result, 'final_output'):
             if hasattr(result.final_output, 'json'):
                 try:
                     response_text = result.final_output.json()
-                except:
+                except Exception:
                     response_text = str(result.final_output)
             elif hasattr(result.final_output, 'model_dump'):
                 response_text = str(result.final_output.model_dump())
             else:
                 response_text = str(result.final_output)
-        
-        # Try to extract usage information if available
+
+        # Extract usage: Agents SDK uses context_wrapper.usage with input_tokens/output_tokens
         prompt_tokens = None
         completion_tokens = None
         total_tokens = None
-        
-        if hasattr(result, 'usage'):
-            usage = result.usage
-            if hasattr(usage, 'prompt_tokens'):
-                prompt_tokens = usage.prompt_tokens
-            if hasattr(usage, 'completion_tokens'):
-                completion_tokens = usage.completion_tokens
-            if hasattr(usage, 'total_tokens'):
-                total_tokens = usage.total_tokens
-        
+        usage_obj = None
+        if hasattr(result, 'context_wrapper') and result.context_wrapper is not None and hasattr(result.context_wrapper, 'usage'):
+            usage_obj = result.context_wrapper.usage
+        elif hasattr(result, 'usage'):
+            usage_obj = result.usage
+        if usage_obj is not None:
+            if hasattr(usage_obj, 'input_tokens'):
+                prompt_tokens = getattr(usage_obj, 'input_tokens', None)
+            if prompt_tokens is None and hasattr(usage_obj, 'prompt_tokens'):
+                prompt_tokens = getattr(usage_obj, 'prompt_tokens', None)
+            if hasattr(usage_obj, 'output_tokens'):
+                completion_tokens = getattr(usage_obj, 'output_tokens', None)
+            if completion_tokens is None and hasattr(usage_obj, 'completion_tokens'):
+                completion_tokens = getattr(usage_obj, 'completion_tokens', None)
+            if hasattr(usage_obj, 'total_tokens'):
+                total_tokens = getattr(usage_obj, 'total_tokens', None)
+            if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+                total_tokens = prompt_tokens + completion_tokens
+
         # Log the call (if logging service is available)
         if logging_service:
             try:
@@ -117,8 +148,9 @@ async def run_agent_with_logging(
                     provider="openai",
                     model=model_name,
                     request_type="agent_run",
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    response_text=response_text[:10000] if response_text else None,
+                    response_text=response_text,
                     response_metadata=response_metadata,
                     success=True,
                     prompt_tokens=prompt_tokens,
@@ -142,19 +174,20 @@ async def run_agent_with_logging(
         if logging_service:
             try:
                 await logging_service.log_llm_call(
-                call_type="agent_sdk",
-                provider="openai",
-                model=model_name,
-                request_type="agent_run",
-                user_prompt=user_prompt,
-                success=False,
-                error_message=str(e),
-                latency_ms=latency_ms,
-                context_source=context_source,
-                document_id=document_id,
-                concept_id=concept_id,
-                test_id=test_id,
-                metadata=metadata
+                    call_type="agent_sdk",
+                    provider="openai",
+                    model=model_name,
+                    request_type="agent_run",
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    success=False,
+                    error_message=str(e),
+                    latency_ms=latency_ms,
+                    context_source=context_source,
+                    document_id=document_id,
+                    concept_id=concept_id,
+                    test_id=test_id,
+                    metadata=metadata
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log agent error: {log_error}", exc_info=True)
