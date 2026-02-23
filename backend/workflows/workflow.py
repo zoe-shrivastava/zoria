@@ -62,23 +62,31 @@ document_parser = Agent(
 )
 
 
-concept_extrator = Agent(
-    name="Concept Extrator",
-    instructions=get_prompt("concept_extractor"),
-    model="gpt-5-nano",
-    tools=[
-        #file_search
-    ],
-    output_type=ConceptExtratorSchema,
-    model_settings=ModelSettings(
-        store=True,
-        max_tokens=32000,  # High limit so long study guides yield full concept list and all questions
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
+def get_concept_extractor_agent(subject: Optional[str] = None):
+    """Build concept extractor agent with optional subject-specific taxonomy.
+    
+    When subject is set (e.g. display name 'Mathematics', 'Physics'), only that
+    subject's slice of subject_topics.json is included in the prompt.
+    """
+    return Agent(
+        name="Concept Extrator",
+        instructions=get_prompt("concept_extractor", subject=subject),
+        model="gpt-5-nano",
+        tools=[],
+        output_type=ConceptExtratorSchema,
+        model_settings=ModelSettings(
+            store=True,
+            max_tokens=32000,
+            reasoning=Reasoning(
+                effort="low",
+                summary="auto"
+            )
         )
     )
-)
+
+
+# Legacy agent with full taxonomy (used only when no subject is available)
+concept_extrator = get_concept_extractor_agent(subject=None)
 
 
 class WorkflowInput(BaseModel):
@@ -290,6 +298,15 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
         if not state["markdown"] or markdown_length < 100:
             logger.error(f"Document parser returned empty or very short markdown ({markdown_length} chars). This will cause zero concepts.")
         
+        # Infer subject from markdown so we send only that subject's taxonomy to the concept extractor
+        subject_id = await extract_subject_from_markdown(state["markdown"])
+        subject_for_taxonomy = None
+        if subject_id and subject_id != "other":
+            subject_for_taxonomy = get_subject_display_name(subject_id)
+            logger.info(f"Using subject-specific taxonomy for concept extractor: {subject_for_taxonomy} (subject_id={subject_id})")
+        else:
+            logger.info("Using full subject_topics taxonomy for concept extractor (subject unknown or 'other')")
+        
         # Create fresh conversation history with only markdown for concept extractor
         # The concept extractor needs markdown input, not the PDF
         markdown_text = state["markdown"] if state["markdown"] else "No markdown content available. Please extract concepts from the document."
@@ -311,9 +328,10 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
         
         logger.info(f"Sending {len(markdown_text)} characters to concept extractor")
         
-        # Run concept extractor with logging
+        # Run concept extractor with subject-specific taxonomy when available
+        concept_extractor_agent = get_concept_extractor_agent(subject_for_taxonomy)
         concept_extrator_result_temp = await run_agent_with_logging(
-            concept_extrator,
+            concept_extractor_agent,
             input_data=concept_extractor_history,
             run_config=RunConfig(trace_metadata={
                 "__trace_source__": "agent-builder",
@@ -414,6 +432,13 @@ async def extract_concepts_from_markdown(
     from services.agent_logging_wrapper import run_agent_with_logging
     from agents import RunConfig
     
+    # Infer subject from markdown so we send only that subject's taxonomy
+    subject_id = await extract_subject_from_markdown(markdown)
+    subject_for_taxonomy = None
+    if subject_id and subject_id != "other":
+        subject_for_taxonomy = get_subject_display_name(subject_id)
+        logger.info(f"extract_concepts_from_markdown: using taxonomy for subject {subject_for_taxonomy}")
+    
     # Prepare conversation history with markdown as text input
     conversation_history = [{
         "role": "user",
@@ -425,9 +450,10 @@ async def extract_concepts_from_markdown(
         ]
     }]
     
-    # Run concept extractor with logging
+    # Run concept extractor with subject-specific taxonomy when available
+    concept_extractor_agent = get_concept_extractor_agent(subject_for_taxonomy)
     concept_extrator_result_temp = await run_agent_with_logging(
-        concept_extrator,
+        concept_extractor_agent,
         input_data=conversation_history,
         run_config=RunConfig(trace_metadata={
             "__trace_source__": "agent-builder",

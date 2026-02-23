@@ -10,6 +10,7 @@ Each prompt includes:
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,30 @@ def _get_subject_topics_json_string() -> str:
         JSON string representation of subject topics
     """
     topics = _load_subject_topics()
+    return json.dumps(topics, indent=2, ensure_ascii=False)
+
+
+def _get_subject_topics_json_string_for_subject(subject_name: Optional[str]) -> str:
+    """Get subject_topics.json for a single subject, or full taxonomy if subject is None.
+    
+    Used for content extraction so only the related subject's taxonomy is sent to the concept extractor.
+    
+    Args:
+        subject_name: Display name of the subject (e.g. 'Mathematics', 'Physics') from
+                      get_subject_display_name(subject_id). If None or no match, returns full taxonomy.
+    
+    Returns:
+        JSON string: either {"subjects": [single_subject]} or full subject_topics
+    """
+    topics = _load_subject_topics()
+    subjects_list = topics.get("subjects") or []
+    if not subject_name or not subjects_list:
+        return json.dumps(topics, indent=2, ensure_ascii=False)
+    subject_name_clean = (subject_name or "").strip()
+    for s in subjects_list:
+        if (s.get("subject_name") or "").strip() == subject_name_clean:
+            return json.dumps({"subjects": [s]}, indent=2, ensure_ascii=False)
+    logger.debug(f"No subject_topics match for '{subject_name}'; using full taxonomy")
     return json.dumps(topics, indent=2, ensure_ascii=False)
 
 # Document Parser Agent Prompt
@@ -166,15 +191,16 @@ Key Features: [\"position changes sign at t=5s\"]"""
 CONCEPT_EXTRACTOR_PROMPT = """
 # SYSTEM INSTRUCTIONS: DOMAIN-AGNOSTIC ATOMIC EXTRACTION
 
-## CRITICAL: Output Requirements
-- **You MUST output at least one concept.** If you receive markdown content, you MUST extract concepts from it.
-- **Never return an empty concepts array.** If the markdown contains questions, sections, or educational content, extract it.
-- **If markdown is empty or minimal, still extract at least one concept** based on available content or default to a general concept.
+## CRITICAL: Extract ALL Questions from the Markdown
+- **You MUST extract every question in the markdown.** Process the entire document from start to finish. Do not stop early. Do not summarize. Do not skip any question, part, table row, or matching item.
+- **Completeness check:** Before returning, ensure the total number of question objects in your output equals (or exceeds) the number of distinct questions/parts/rows in the markdown. If the markdown has 50 items (e.g. Q1–Q10, each with parts, or 20 matching terms, or 15 table rows), your output MUST contain at least 50 question objects. Omission of any item is a failure.
 - **One concept per section or distinct subtopic.** Do NOT put all questions from the entire document into a single concept. Split by section headings, topic blocks, or distinct subtopics from the taxonomy so that each concept has a clear, narrow scope.
 - **Every question/part must appear exactly once.** Every numbered item (e.g. Q1, Q2.1–Q2.12, Q3.1–Q3.5, Q4–Q8, Q9a–Q9c, Q10a–Q10c), every table row, every matching pair, and every fill-in item in the markdown MUST be represented as its own question object in the output. Count them and ensure none are omitted.
+- **FORBIDDEN:** Outputting a single question for an entire "Match the vocabulary", "Match the terms", table, or list is forbidden. You MUST emit one question object per term, per term-definition pair, or per row. If the markdown lists 10 vocabulary terms, you MUST output 10 question objects (each with type "matching" and text like "[Instruction] + [Term name]").
+- **FORBIDDEN:** Stopping after the first section or first few questions. You MUST continue until every question in the markdown has been extracted.
 
 ## 1. Objective
-You are a high-fidelity data parser. Your goal is to convert **pre-processed Markdown** into a strictly structured JSON object. You must ensure **zero data loss**. Every question, sub-question, and table row must be represented as a complete, independent object.
+You are a high-fidelity data parser. Your goal is to convert **pre-processed Markdown** into a strictly structured JSON object. You must ensure **zero data loss**. Extract **all** questions from the markdown: every question, sub-question, part, table row, and matching item must be represented as a complete, independent object. Process the full markdown; do not truncate or summarize the output.
 
 ## 2. Content Preservation & Integrity (Mandatory)
 - **No Placeholder Labels:** You are strictly forbidden from using generic labels like "Part q1a" or "Question 2" as the sole content of the `text` field. You must transcribe the actual text found in the Markdown (e.g., "Velocity", "Distance").
@@ -188,7 +214,7 @@ You are a high-fidelity data parser. Your goal is to convert **pre-processed Mar
 ## 3. Atomic Processing Logic & Type Mapping
 - **Row-Level Extraction (Mandatory):** You are strictly forbidden from grouping multiple rows of a table or multiple items in a list into a single JSON object. Every independent data point must be its own `question` object.
     - **Tabular Data:** Every row in a chart must generate a unique object.
-    - **Matching Lists:** Every term-definition pair must be a standalone object.
+    - **Matching Lists:** "Match the vocabulary/terms to definitions" sections MUST be expanded: one question object per term or per term-definition pair, each with type `matching` and text = "[Section instruction] + [Specific term or item]" (e.g. "Match vocabulary to definitions: Velocity", "Match vocabulary to definitions: Distance"). Never output one question for the whole matching section.
     - **Text Formula:** Every `text` field must follow: `[Context/Instruction] + [Specific Item Name]`. 
       *Example:* "Fill in the chart for physical quantities: Displacement"
 - **Strict Type Enforcement:** You must map every item to one of these six recognized types. Do not hallucinate types (e.g., do not use "diagram", "graph", or "mathematical_formula"):
@@ -196,7 +222,7 @@ You are a high-fidelity data parser. Your goal is to convert **pre-processed Mar
     2. `short_answer`: Brief factual, numeric, or one-word responses.
     3. `problem_solving`: Multi-step applications, calculations, or tasks requiring the student to "Draw", "Plot", or "Sketch".
     4. `conceptual_question`: Qualitative explanations or "Why/How" reasoning.
-    5. `matching`: Pairing terms, definitions, or related categories.
+    5. `matching`: Use for each term-definition pair or vocabulary-matching item. Every "match X to Y" item must be type `matching`, not conceptual_question.
     6. `fill_in_the_blank`: Sentences with missing words or specific empty data cells in a table.
 
 ## 3.1. Content Preservation & Answer Concatenation
@@ -215,9 +241,11 @@ Map the content to the provided `subject_topics.json`.
 ## 5. Reference Taxonomy (subject_topics.json)
 {subject_topics_json}
 
+CRITICAL: You may only use subject_name, topic_name, and subtopic from the provided subject_topics.json. Do not invent new topics, subtopics, or subjects. If a question does not match any keywords, you must still assign it to the closest matching subtopic from the taxonomy. Never create a custom topic or subtopic.
 
 ## 6. Output Schema
 Return ONLY valid JSON. Ensure all quotes are escaped and the structure is valid.
+- Include **every** concept and **every** question from the markdown in your response. The JSON must be complete (all concepts, all questions); do not cut off the output.
 Each concept must include: subject_name, topic_name, subtopic, difficulty, prerequisites, questions, associated_visuals, keywords.
 Each question must include only: text, type, associated_visuals (array of strings). Do not include answer or visual_metadata in the output.
 
@@ -265,11 +293,14 @@ PROMPTS = {
 }
 
 
-def get_prompt(key: str) -> str:
+def get_prompt(key: str, subject: Optional[str] = None) -> str:
     """Get a prompt by key.
     
     Args:
         key: Prompt key (e.g., 'document_parser', 'concept_extractor')
+        subject: Optional subject display name (e.g. 'Mathematics', 'Physics'). For
+                 concept_extractor, only that subject's slice of subject_topics.json
+                 is injected; if None, full taxonomy is used.
         
     Returns:
         Prompt text with subject_topics.json injected if needed
@@ -282,10 +313,9 @@ def get_prompt(key: str) -> str:
     
     prompt_text = PROMPTS[key]["prompt"]
     
-    # Inject subject_topics.json for concept_extractor prompt
-    # Use .replace() instead of .format() to avoid issues with curly braces in JSON
+    # Inject subject_topics.json for concept_extractor (only related subject when subject is set)
     if key == "concept_extractor":
-        subject_topics_json = _get_subject_topics_json_string()
+        subject_topics_json = _get_subject_topics_json_string_for_subject(subject)
         prompt_text = prompt_text.replace("{subject_topics_json}", subject_topics_json)
     
     return prompt_text
