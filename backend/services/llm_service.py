@@ -281,7 +281,9 @@ class LLMService:
                 
                 raise
         
-        # Ollama path
+        # Ollama path (response_text/metadata in scope for error logging)
+        response_text: Optional[str] = None
+        metadata: Optional[Dict[str, Any]] = None
         try:
             async with aiohttp.ClientSession() as session:
                 options: Dict[str, Any] = {"temperature": temperature}
@@ -362,7 +364,7 @@ class LLMService:
             error_message = str(e)
             logger.error(f"Error generating text via LLM (Ollama): {e}")
             
-            # Log error
+            # Log error (include any partial response we have so it appears in LLM logs)
             if self.logging_service:
                 latency_ms = int((time.time() - start_time) * 1000)
                 await self.logging_service.log_llm_call(
@@ -376,6 +378,8 @@ class LLMService:
                     max_tokens=max_tokens,
                     success=False,
                     error_message=error_message,
+                    response_text=response_text,
+                    response_metadata=metadata,
                     latency_ms=latency_ms,
                     context_source=self.context_source,
                     document_id=document_id,

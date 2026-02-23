@@ -305,7 +305,7 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
 1. **Transformation:** Do not repeat the study guide questions verbatim. If the context provides an equation, create a question where the student must identify its properties (intercepts, vertex, growth) or apply it to a scenario.
 2. **Cognitive Level (Application):** Questions must require the user to perform a calculation or apply a rule. Avoid "Recall" questions (e.g., "What is the formula for...").
 3. **LaTeX Standard:** Use $...$ for all mathematical expressions and technical notation.
-4. **Question Type Selection:** Choose the most appropriate question type for each question:
+4. **Question Type Selection:** Select exactly one question_type per question. Never combine types. The value must be EXACTLY one of:
    - **multiple_choice**: Use for questions with clear correct answers that can have plausible distractors. Include exactly 4 options (A, B, C, D) and use error_pattern_map to explain distractor design. REQUIRED: options, correct_answer, error_pattern_map.
    - **short_answer**: Use for questions requiring brief text or numeric responses (1-2 sentences or a number). REQUIRED: expected_answer (must be a specific answer, not a placeholder).
    - **problem_solving**: Use for multi-step problems requiring detailed solutions or explanations. REQUIRED: expected_answer (must be a specific answer or final result, not a placeholder).
@@ -319,7 +319,8 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
    - Format: Use `\\begin{{tikzpicture}}...\\end{{tikzpicture}}` with appropriate TikZ commands
    - Include axes labels, scales, and key features relevant to the question
    - Example: For a linear function $y = 2x + 3$, include a graph with labeled axes, the line, and key points
-   - If the question doesn't require a visual, omit `diagram_code` (it's optional)
+   - diagram_code is REQUIRED. If no visual is needed, set diagram_code to null.
+   - needs_graph and needs_diagram must ALWAYS be present. If not needed, set to false.
 5. **Plausible Distractors (MCQ only):** For multiple_choice questions, analyze the "common_mistakes_patterns" in the subject profile. Every incorrect option must be reachable through a specific, identified error (e.g., a sign error or wrong order of operations).
 6. **CRITICAL - Correct Answers:** 
    - For multiple_choice: Always provide correct_answer (A, B, C, or D).
@@ -352,13 +353,97 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
 **Context & Sample Questions:**
 {context_text}
 
-OUTPUT RULES:
-- Return JSON strictly matching the schema below. Do not include any extra fields.
-- Do NOT include any markdown or code fences. JSON only.
-- Vary question types appropriately based on the content - use multiple_choice, short_answer, and problem_solving as appropriate.
-- For multiple_choice: include options, correct_answer, and error_pattern_map.
-- For short_answer and problem_solving: include expected_answer with a specific, concrete answer (REQUIRED).
-- EVERY question must include a hint (REQUIRED).
+# OUTPUT RULES (STRICT COMPLIANCE REQUIRED)
+
+## General Requirements
+
+1. Return valid JSON only.
+2. Do NOT include markdown, explanations, comments, or code fences in the output.
+3. The root object must contain exactly one key: "questions".
+4. "questions" must be an array of question objects.
+5. Do NOT include any fields not defined in the schema.
+
+---
+
+## Required Fields (For EVERY Question)
+
+Each question object MUST include:
+
+- "question_text"
+- "question_type" (REQUIRED — must be exactly one of: "multiple_choice", "short_answer", "problem_solving")
+- "difficulty"
+- "cognitive_level"
+- "hint"
+- "solution_steps"
+- "needs_graph"
+- "needs_diagram"
+- "diagram_code"
+- "metadata"
+
+Omission of "question_type" is invalid.
+
+---
+
+## Conditional Field Rules
+
+### If "question_type" = "multiple_choice"
+
+You MUST include:
+- "options" (exactly 4 options labeled A, B, C, D)
+- "correct_answer" (must be one of: A, B, C, D)
+- "error_pattern_map" (must include keys: B, C, D)
+
+You MUST NOT include:
+- "expected_answer"
+
+---
+
+### If "question_type" = "short_answer" OR "problem_solving"
+
+You MUST include:
+- "expected_answer" (must be specific and concrete)
+
+You MUST NOT include:
+- "options"
+- "correct_answer"
+- "error_pattern_map"
+
+---
+
+## Graph and Diagram Rules
+
+- "needs_graph" must be true or false.
+- "needs_diagram" must be true or false.
+- "diagram_code" must be:
+  - null if no visual is required
+  - Valid LaTeX TikZ code if a visual is required
+
+---
+
+## Solution Rules
+
+- "solution_steps" must be an array.
+- Minimum of 2 logical steps required.
+- Steps must clearly lead to the final answer.
+
+---
+
+## Metadata Rules
+
+- "metadata" must contain:
+  - "estimated_time_seconds" (integer)
+
+No additional metadata fields are allowed.
+
+---
+
+## Absolute Restrictions
+
+- Do NOT include comments (//).
+- Do NOT mix multiple_choice and short_answer/problem_solving fields.
+- Do NOT omit required fields.
+- Do NOT add extra keys.
+- Before returning JSON, internally verify that every question includes "question_type".
 
 JSON SCHEMA:
 {json_schema.format(difficulty=difficulty)}
@@ -379,7 +464,7 @@ JSON SCHEMA:
 **Subtopics for this concept:** {concept_name}
 
 **Instruction for AI:**
-Using the Context provided, generate {num_questions} questions. Choose the most appropriate question type for each question based on the content:
+Using the Context provided, generate {num_questions} questions. 
 - Use **multiple_choice** for questions with clear correct answers and plausible distractors
 - Use **short_answer** for brief responses (text or numbers)
 - Use **problem_solving** for multi-step problems requiring detailed work
@@ -401,7 +486,9 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
             response = await self.llm_service.generate_json(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.7,
+                temperature=0.2,
+                top_p = 0.9,
+                repeat_penalty = 1.1,
                 max_tokens=max_tokens,
                 concept_id=str(concept_id) if concept_id else None,
                 metadata={

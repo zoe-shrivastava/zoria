@@ -416,10 +416,11 @@ class TestGenerationService:
                             logger.info(f"✓ Stored question {question_id_str} for concept {concept_id_uuid} (question {idx + 1}/{len(questions_list)}, diagram_code: {'yes' if diagram_code else 'no'})")
                         except Exception as e:
                             total_failed += 1
-                            logger.error(f"✗ Failed to store question {idx + 1}/{len(questions_list)} for concept {concept_id_uuid}: {e}", exc_info=True)
+                            logger.warning(f"✗ Failed to store question {idx + 1}/{len(questions_list)} for concept {concept_id_uuid}: {e}", exc_info=True)
                 
                 logger.info(f"Question storage summary: {total_generated} stored, {total_skipped_duplicate} skipped (duplicates), {total_failed} failed")
-                
+                if total_generated > 0 and total_failed > 0:
+                    logger.info(f"Test was still created with {total_generated} stored questions ({total_failed} storage failures).")
                 if total_generated > 0:
                     logger.info(f"Generated and stored {total_generated} questions for {len(concept_ids)} concepts in a single LLM request")
             except Exception as e:
@@ -971,10 +972,11 @@ class TestGenerationService:
                             logger.info(f"✓ Stored question {question_id_str} for concept {concept_id_uuid} (question {idx + 1}/{len(questions_list)}, diagram_code: {'yes' if diagram_code else 'no'})")
                         except Exception as e:
                             total_failed += 1
-                            logger.error(f"✗ Failed to store question {idx + 1}/{len(questions_list)} for concept {concept_id_uuid}: {e}", exc_info=True)
+                            logger.warning(f"✗ Failed to store question {idx + 1}/{len(questions_list)} for concept {concept_id_uuid}: {e}", exc_info=True)
                 
                 logger.info(f"Question storage summary: {total_generated} stored, {total_skipped_duplicate} skipped (duplicates), {total_failed} failed")
-                
+                if total_generated > 0 and total_failed > 0:
+                    logger.info(f"Test was still created with {total_generated} stored questions ({total_failed} storage failures).")
                 if total_generated > 0:
                     logger.info(f"Generated and stored {total_generated} questions for {len(matched_concept_ids)} concepts in a single LLM request")
             except Exception as e:
