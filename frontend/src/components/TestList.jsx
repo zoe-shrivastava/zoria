@@ -20,16 +20,16 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
     if (!hasDraftTests) return
 
     const interval = setInterval(() => {
-      loadTests()
+      loadTests(true) // silent: don't show full-page loading, just update list in place
     }, 3000) // Poll every 3 seconds
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testList])
 
-  const loadTests = async () => {
+  const loadTests = async (silent = false) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const data = await tests.list(childId, statusFilter)
       const testsArray = Array.isArray(data.tests) ? data.tests : []
       setTestList(testsArray)
@@ -38,7 +38,7 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
         showNotification(error.message || 'Failed to load tests', 'error')
       }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 

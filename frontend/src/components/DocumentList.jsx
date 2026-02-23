@@ -45,21 +45,20 @@ export default function DocumentList({ childId, isChild = false, userRole = null
     }
   }
 
-  // Poll for status updates if any documents are processing
+  // Poll for status updates by row (only refresh documents that are still processing)
   useEffect(() => {
-    const hasProcessingDocs = documentsList.some(doc => 
+    const docsNeedingRefresh = documentsList.filter(doc =>
       doc.status === 'processing' || doc.status === 'parsed' || doc.status === 'uploaded'
     )
-    
-    if (!hasProcessingDocs) return
-    
-    // Poll every 3 seconds for status updates
-    const interval = setInterval(() => {
-      loadDocuments()
-    }, 3000)
-    
+    if (docsNeedingRefresh.length === 0) return
+
+    const refreshAllProcessing = () => {
+      docsNeedingRefresh.forEach(doc => refreshDocumentStatus(doc.id))
+    }
+
+    refreshAllProcessing()
+    const interval = setInterval(refreshAllProcessing, 3000)
     return () => clearInterval(interval)
-    // Only re-run when document count or statuses change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentsList.map(d => `${d.id}:${d.status}`).join(',')])
 
@@ -85,6 +84,28 @@ export default function DocumentList({ childId, isChild = false, userRole = null
       setDocumentsList([])
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Refresh status for a single document (by row) without refetching the whole list
+  const refreshDocumentStatus = async (docId) => {
+    try {
+      let data
+      if (userRole === 'admin') {
+        const { admin } = await import('../services/api')
+        data = await admin.getDocument(docId)
+      } else {
+        data = await documents.get(docId)
+      }
+      if (data && data.id) {
+        setDocumentsList(prev =>
+          prev.map(d => (d.id === docId ? { ...d, ...data } : d))
+        )
+      }
+    } catch (error) {
+      if (!isAuthError(error)) {
+        console.warn(`Failed to refresh status for document ${docId}:`, error)
+      }
     }
   }
 
