@@ -6,6 +6,7 @@ Adapted from test/test_openai_workflow.py
 import base64
 import os
 import logging
+import re
 from collections import Counter
 from typing import Optional
 from pydantic import BaseModel
@@ -20,6 +21,32 @@ from subject_config import get_subject_for_classification, get_subject_display_n
 
 logger = logging.getLogger(__name__)
 
+
+def _estimate_question_count_from_markdown(markdown: str) -> int:
+    """Heuristic lower-bound estimate of how many questions exist in the markdown.
+
+    This is intentionally cheap and conservative. We just want a signal when the
+    concept extractor has clearly under-recalled questions compared to obvious
+    cues in the markdown.
+    """
+    if not markdown:
+        return 0
+
+    # Count main questions like "Question q9"
+    q_main = len(re.findall(r"^Question\\s+q\\d+", markdown, flags=re.MULTILINE))
+
+    # Count parts like "- Part q9.a"
+    q_parts = len(re.findall(r"^-\\s+Part\\s+q\\d+\\.[a-z]", markdown, flags=re.MULTILINE))
+
+    # Concept questions like "- Q4:", "- Q5:"
+    concept_qs = len(re.findall(r"^-\\s+Q\\d+:", markdown, flags=re.MULTILINE))
+
+    # Lettered sub-parts like "a.", "b.", "c.", "d." at the start of a line
+    # These often indicate multi-part questions under a single numbered stem (e.g. "41. ... a. ... b. ...").
+    lettered_parts = len(re.findall(r"^[a-z]\\.", markdown, flags=re.MULTILINE))
+
+    return q_main + q_parts + concept_qs + lettered_parts
+
 # Tool definitions
 file_search = FileSearchTool(
     vector_store_ids=[
@@ -32,6 +59,7 @@ class ConceptExtratorSchema__QuestionsItem(BaseModel):
     text: str
     type: str
     associated_visuals: list[str]
+    answer: str | None = None
 
 
 class ConceptExtratorSchema__ConceptsItem(BaseModel):
@@ -76,9 +104,9 @@ def get_concept_extractor_agent(subject: Optional[str] = None):
         output_type=ConceptExtratorSchema,
         model_settings=ModelSettings(
             store=True,
-            max_tokens=32000,
+            max_tokens=128000,
             reasoning=Reasoning(
-                effort="low",
+                effort="medium",
                 summary="auto"
             )
         )
@@ -328,47 +356,79 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
         
         logger.info(f"Sending {len(markdown_text)} characters to concept extractor")
         
-        # Run concept extractor with subject-specific taxonomy when available
+        # Run concept extractor with subject-specific taxonomy when available,
+        # and retry once if we get zero concepts (LLM can be flaky).
         concept_extractor_agent = get_concept_extractor_agent(subject_for_taxonomy)
-        concept_extrator_result_temp = await run_agent_with_logging(
-            concept_extractor_agent,
-            input_data=concept_extractor_history,
-            run_config=RunConfig(trace_metadata={
-                "__trace_source__": "agent-builder",
-                "workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef"
-            }),
-            context_source="document_processing",
-            document_id=workflow.get("document_id") if isinstance(workflow, dict) else None,
-            metadata={"workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef", "agent": "concept_extractor"}
-        )
+        max_attempts = 2
+        last_error: Exception | None = None
+        concept_extrator_result_temp = None
+        concept_extrator_result = None
 
-        conversation_history.extend([item.to_input_item() for item in concept_extrator_result_temp.new_items])
+        for attempt in range(1, max_attempts + 1):
+            logger.info(f"Running concept extractor (attempt {attempt}/{max_attempts})")
+            concept_extrator_result_temp = await run_agent_with_logging(
+                concept_extractor_agent,
+                input_data=concept_extractor_history,
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef"
+                }),
+                context_source="document_processing",
+                document_id=workflow.get("document_id") if isinstance(workflow, dict) else None,
+                metadata={"workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef", "agent": "concept_extractor"}
+            )
 
-        # Debug: Check if output is valid
-        try:
-            concept_extrator_result = {
-                "output_text": concept_extrator_result_temp.final_output.json(),
-                "output_parsed": concept_extrator_result_temp.final_output.model_dump()
-            }
-            logger.debug(f"Concept extractor output keys: {list(concept_extrator_result['output_parsed'].keys())}")
-            logger.debug(f"Concept extractor output type: {type(concept_extrator_result['output_parsed'])}")
-        except Exception as e:
-            logger.error(f"Failed to parse concept extractor output: {e}")
-            logger.error(f"Raw output type: {type(concept_extrator_result_temp.final_output)}")
-            logger.error(f"Raw output: {str(concept_extrator_result_temp.final_output)[:500]}")
-            # Try to get string output as fallback
+            conversation_history.extend([item.to_input_item() for item in concept_extrator_result_temp.new_items])
+
             try:
-                raw_text = concept_extrator_result_temp.final_output_as(str)
-                logger.error(f"Raw text output (first 1000 chars): {raw_text[:1000]}")
-            except Exception as e2:
-                logger.error(f"Could not get string output: {e2}")
-            raise
+                concept_extrator_result = {
+                    "output_text": concept_extrator_result_temp.final_output.json(),
+                    "output_parsed": concept_extrator_result_temp.final_output.model_dump()
+                }
+                logger.debug(f"Concept extractor output keys: {list(concept_extrator_result['output_parsed'].keys())}")
+                logger.debug(f"Concept extractor output type: {type(concept_extrator_result['output_parsed'])}")
+            except Exception as e:
+                last_error = e
+                logger.error(f"Failed to parse concept extractor output on attempt {attempt}: {e}")
+                logger.error(f"Raw output type: {type(concept_extrator_result_temp.final_output)}")
+                logger.error(f"Raw output: {str(concept_extrator_result_temp.final_output)[:500]}")
+                try:
+                    raw_text = concept_extrator_result_temp.final_output_as(str)
+                    logger.error(f"Raw text output (first 1000 chars): {raw_text[:1000]}")
+                except Exception as e2:
+                    logger.error(f"Could not get string output: {e2}")
+
+                if attempt == max_attempts:
+                    raise
+                else:
+                    continue
+
+            concepts_list_peek = concept_extrator_result["output_parsed"].get("concepts", [])
+            if concepts_list_peek:
+                # Got at least one concept, proceed
+                break
+
+            logger.warning("Concept extractor returned ZERO concepts on this attempt.")
+            if attempt == max_attempts:
+                logger.error("Max attempts reached; proceeding with zero concepts result.")
+            # Loop continues to retry once when attempt == 1
         
         # Extract subject_name from concepts output (no need for separate LLM call)
         extracted_subject = None
         concepts_list = concept_extrator_result["output_parsed"].get("concepts", [])
         total_questions = sum(len(c.get("questions", [])) for c in concepts_list)
         logger.info(f"Extracted {len(concepts_list)} concepts and {total_questions} total questions from output")
+
+        # Heuristic coverage check: how many questions should we have?
+        expected_questions = _estimate_question_count_from_markdown(markdown_text)
+        if expected_questions > 0 and total_questions < expected_questions:
+            logger.warning(
+                "Concept extractor under-recalled questions: expected at least %d, got %d. "
+                "This will cause missing questions in Concept JSON.",
+                expected_questions,
+                total_questions,
+            )
+
         if len(concepts_list) == 1 and total_questions < 10:
             logger.warning("Only one concept with few questions—possible truncation or over-grouping; check max_tokens and prompt.")
         if len(concepts_list) == 0:

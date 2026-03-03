@@ -371,12 +371,14 @@ class DocumentProcessor:
                             normalized_difficulty = KnowledgeGraphService._normalize_difficulty(raw_difficulty)
                             
                             # Include subject and document_id in question metadata
+                            # source: "concept_extraction" marks this question as from ingestion (Concept JSON)
                             question_metadata = {
                                 "associated_visuals": question_data.get("associated_visuals", []),
                                 "visual_metadata": question_data.get("visual_metadata"),
                                 "answer": question_data.get("answer"),  # Store extracted answer
                                 "subject": document_subject,  # Store subject with question
-                                "document_id": document_id  # Store document_id to track question origin
+                                "document_id": document_id,  # Store document_id to track question origin
+                                "source": "concept_extraction",  # Raw KG: question from document ingestion
                             }
                             question_id = await self.question_repo.create_question(
                                 concept_id=concept_id,

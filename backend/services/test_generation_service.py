@@ -250,12 +250,19 @@ class TestGenerationService:
         if not concept:
             raise ValueError(f"Concept not found: {concept_id}")
         
-        # Get concept IDs to include (main + prerequisites if enabled)
+        # Get concept IDs to include (main + prerequisites if enabled), scoped to this child only
         concept_ids = [concept_id]
         if include_prerequisites:
             prerequisite_ids = await self._get_prerequisite_concepts(concept_id)
             concept_ids.extend(prerequisite_ids)
             logger.info(f"Including {len(prerequisite_ids)} prerequisite concepts")
+        allowed_ids = await self._get_concept_ids_for_child(child_id)
+        concept_ids = [cid for cid in concept_ids if str(cid) in allowed_ids]
+        if not concept_ids:
+            raise ValueError(
+                f"Concept {concept_id} is not associated with this child's documents. "
+                "Tests and study material are limited to this child's content only."
+            )
         
         # Get subject from concept metadata
         concept_metadata = concept.get('metadata') or {}
@@ -500,6 +507,31 @@ class TestGenerationService:
         # the user clicks "Start Test"; the start endpoint sets started_at when starting.
         await self.test_repo.update_test_status(test_id, 'active')
     
+    async def _get_concept_ids_for_child(self, child_id: str) -> set:
+        """Get set of concept IDs that belong to this child's documents only.
+        
+        Used to enforce child boundary: tests, study material, and question search
+        must never use concepts from another child.
+        """
+        rows = await self.db.fetch(
+            """
+            SELECT DISTINCT c.id
+            FROM concepts c
+            LEFT JOIN document_concepts dc ON c.id = dc.concept_id
+            JOIN documents d ON (
+                c.document_id = d.id
+                OR dc.document_id = d.id
+            )
+            WHERE (
+                d.child_id = $1
+                OR d.id IN (SELECT document_id FROM document_children WHERE child_id = $1)
+            )
+            AND d.is_active = TRUE
+            """,
+            child_id
+        )
+        return {str(r["id"]) for r in rows} if rows else set()
+
     async def _get_prerequisite_concepts(self, concept_id: str) -> List[str]:
         """Get all prerequisite concept IDs for a concept.
         
@@ -818,6 +850,9 @@ class TestGenerationService:
                 if pid not in matched_concept_ids:
                     matched_concept_ids.append(pid)
             logger.info(f"Including {len(all_prerequisite_ids)} prerequisite concepts")
+        # Enforce child boundary: only use concepts from this child's documents
+        allowed_ids = await self._get_concept_ids_for_child(child_id)
+        matched_concept_ids = [cid for cid in matched_concept_ids if str(cid) in allowed_ids]
         
         subject_id = normalize_subject_name(subject)
         

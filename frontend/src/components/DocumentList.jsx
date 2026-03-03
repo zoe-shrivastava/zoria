@@ -163,10 +163,26 @@ export default function DocumentList({ childId, isChild = false, userRole = null
     }
   }
   
+  const [knowledgeGraphDocumentId, setKnowledgeGraphDocumentId] = useState(null)
+
   const handleViewKnowledgeGraph = async (docId) => {
     try {
       const { admin } = await import('../services/api')
       const kgData = await admin.getKnowledgeGraph(docId)
+      setKnowledgeGraphData(kgData)
+      setKnowledgeGraphDocumentId(docId)
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to load knowledge graph', 'error')
+      }
+    }
+  }
+
+  const handleKnowledgeGraphSwitchMode = async (ingestionOnly) => {
+    if (!knowledgeGraphDocumentId) return
+    try {
+      const { admin } = await import('../services/api')
+      const kgData = await admin.getKnowledgeGraph(knowledgeGraphDocumentId, ingestionOnly)
       setKnowledgeGraphData(kgData)
     } catch (error) {
       if (!isAuthError(error)) {
@@ -295,7 +311,8 @@ export default function DocumentList({ childId, isChild = false, userRole = null
     {knowledgeGraphData && createPortal(
       <KnowledgeGraphViewer 
         data={knowledgeGraphData} 
-        onClose={() => setKnowledgeGraphData(null)}
+        onClose={() => { setKnowledgeGraphData(null); setKnowledgeGraphDocumentId(null) }}
+        onSwitchMode={handleKnowledgeGraphSwitchMode}
         userRole={userRole}
       />,
       document.body

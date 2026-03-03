@@ -196,6 +196,7 @@ CONCEPT_EXTRACTOR_PROMPT = """
 - **Completeness check:** Before returning, ensure the total number of question objects in your output equals (or exceeds) the number of distinct questions/parts/rows in the markdown. If the markdown has 50 items (e.g. Q1–Q10, each with parts, or 20 matching terms, or 15 table rows), your output MUST contain at least 50 question objects. Omission of any item is a failure.
 - **One concept per section or distinct subtopic.** Do NOT put all questions from the entire document into a single concept. Split by section headings, topic blocks, or distinct subtopics from the taxonomy so that each concept has a clear, narrow scope.
 - **Every question/part must appear exactly once.** Every numbered item (e.g. Q1, Q2.1–Q2.12, Q3.1–Q3.5, Q4–Q8, Q9a–Q9c, Q10a–Q10c), every table row, every matching pair, and every fill-in item in the markdown MUST be represented as its own question object in the output. Count them and ensure none are omitted.
+- **Multi-part lettered questions:** When a numbered question has sub-parts labeled with letters on their own lines (e.g. "41. ... a. ... b. ... c. ... d. ..."), you MUST emit one separate question object for **each** lettered part (a, b, c, d, etc.). It is forbidden to drop or merge any lettered sub-part.
 - **FORBIDDEN:** Outputting a single question for an entire "Match the vocabulary", "Match the terms", table, or list is forbidden. You MUST emit one question object per term, per term-definition pair, or per row. If the markdown lists 10 vocabulary terms, you MUST output 10 question objects (each with type "matching" and text like "[Instruction] + [Term name]").
 - **FORBIDDEN:** Stopping after the first section or first few questions. You MUST continue until every question in the markdown has been extracted.
 
@@ -243,11 +244,23 @@ Map the content to the provided `subject_topics.json`.
 
 CRITICAL: You may only use subject_name, topic_name, and subtopic from the provided subject_topics.json. Do not invent new topics, subtopics, or subjects. If a question does not match any keywords, you must still assign it to the closest matching subtopic from the taxonomy. Never create a custom topic or subtopic.
 
-## 6. Output Schema
+## 6. Coverage Self-Check (MANDATORY)
+- Before returning, you MUST perform a coverage self-check:
+  1. Count all distinct questions, sub-questions, parts, table rows, and matching terms in the markdown (for example: every line beginning with "Question", "Part", "Q4:", "Q5:", "Q6:", "Practice Question", "Free Response Question", or equivalent numbered/lettered item).
+  2. Let this count be N_expected.
+  3. Count the number of question objects you are returning across ALL concepts (sum of len(concept.questions) for every concept). Let this be N_output.
+  4. You MUST ensure N_output >= N_expected. If N_output < N_expected, you MUST continue extracting additional questions from the remaining sections until EVERY question, part, table row, matching term, and free-response item in the markdown is represented exactly once in your JSON.
+- It is STRICTLY FORBIDDEN to stop after the first section, the first matching block, or the first page. You must process the ENTIRE markdown.
+
+## 7. Output Schema
 Return ONLY valid JSON. Ensure all quotes are escaped and the structure is valid.
 - Include **every** concept and **every** question from the markdown in your response. The JSON must be complete (all concepts, all questions); do not cut off the output.
 Each concept must include: subject_name, topic_name, subtopic, difficulty, prerequisites, questions, associated_visuals, keywords.
-Each question must include only: text, type, associated_visuals (array of strings). Do not include answer or visual_metadata in the output.
+Each question must include:
+- `text`: "[Section Header/Instruction] + [Specific Question Body]"
+- `type`: one of `multiple_choice | short_answer | problem_solving | conceptual_question | matching | fill_in_the_blank`
+- `associated_visuals`: array of strings
+- `answer` (OPTIONAL but REQUIRED when present in the markdown): If the markdown contains a worked answer, numeric result, definition, completed table row, or student/teacher solution (for example, "FN = 127.31 N"), you MUST copy that content into the `answer` field for that question.
 
 ```json
 {
@@ -262,7 +275,8 @@ Each question must include only: text, type, associated_visuals (array of string
         {
           "text": "Parent Instruction: Specific Question Body",
           "type": "multiple_choice | short_answer | problem_solving | conceptual_question | matching | fill_in_the_blank",
-          "associated_visuals": ["string"]
+          "associated_visuals": ["string"],
+          "answer": "Answer, numeric result, definition, or completed row (if present in markdown)"
         }
       ],
       "associated_visuals": ["string"],

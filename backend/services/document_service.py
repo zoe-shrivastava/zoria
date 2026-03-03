@@ -361,12 +361,16 @@ class DocumentService:
                 logger.info(f"Cleanup completed for document {document_id}")
             finally:
                 await processor.db.close()
+            # Re-read document after cleanup so Phase 1 decision uses current state
+            document = await self.document_repo.get_document_by_id(document_id)
+            has_markdown = bool(document.get("markdown_content"))
+            has_concepts = bool(document.get("concepts"))
         else:
             logger.info(f"Cleanup skipped for document {document_id} (cleanup_existing=False)")
         
-        # Step 2: Re-extract concepts from existing markdown (if requested)
-        # For reprocess: Re-extract concepts from existing markdown without re-parsing document
-        if not skip_phase1 and has_markdown:
+        # Step 2: Re-extract concepts from existing markdown when we have markdown.
+        # Always run Phase 1 after cleanup when markdown exists so Phase 2 has concepts.
+        if (not skip_phase1 and has_markdown) or (cleanup_existing and has_markdown):
             # Re-extract concepts from existing markdown (skip document parsing)
             logger.info(f"Re-extracting concepts from existing markdown for document {document_id}...")
             logger.info(f"  - Will re-run concept_extractor agent (concept extraction from markdown)")
@@ -454,9 +458,10 @@ class DocumentService:
         # Pass cleanup_first if we already cleaned up (to avoid double cleanup)
         await enqueue_document_processing(document_id, cleanup_first=False)
         
+        phase1_skipped = skip_phase1 or ((has_markdown and has_concepts) and not cleanup_existing)
         logger.info(
             f"Reprocess complete for document {document_id}. "
-            f"Phase 1: {'skipped (markdown/concepts exist)' if skip_phase1 or (has_markdown and has_concepts) else 'completed'}, "
+            f"Phase 1: {'skipped (markdown/concepts exist)' if phase1_skipped else 'completed'}, "
             f"Cleanup: {'completed' if cleanup_existing else 'skipped'}, "
             f"Phase 2: enqueued (running in background)"
         )

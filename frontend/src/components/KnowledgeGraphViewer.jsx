@@ -2,11 +2,13 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import './KnowledgeGraphViewer.css'
 
-export default function KnowledgeGraphViewer({ data, onClose, userRole = null }) {
+export default function KnowledgeGraphViewer({ data, onClose, onSwitchMode, userRole = null }) {
   const [selectedConcept, setSelectedConcept] = useState(null)
-  const [activeTab, setActiveTab] = useState('graph') // graph, concepts, relationships, questions, skills
+  const [activeTab, setActiveTab] = useState('graph') // graph, concepts, relationships, questions, skills, json
   const [hoveredNode, setHoveredNode] = useState(null)
   const [graphDimensions, setGraphDimensions] = useState({ width: 1200, height: 800 })
+  const [jsonIncludeMarkdown, setJsonIncludeMarkdown] = useState(false)
+  const [jsonCopied, setJsonCopied] = useState(false)
   const graphContainerRef = useRef(null)
   const graphRef = useRef(null)
 
@@ -14,7 +16,8 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
     return null
   }
 
-  const { concepts, relationships, questions, skills, document_name } = data
+  const { concepts, relationships, questions, skills, document_name, ingestion_only: ingestionOnly } = data
+  const showIngestionToggle = typeof onSwitchMode === 'function'
 
   // Build concept map for easy lookup
   const conceptMap = {}
@@ -65,6 +68,28 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
     return questions.filter(q => q.concept_id === conceptId)
   }
 
+  // Build JSON payload for ingestion-only KG view (optionally without full markdown)
+  const jsonDisplayPayload = useMemo(() => {
+    const payload = { ...data }
+    if (!jsonIncludeMarkdown && payload.markdown_content) {
+      const len = payload.markdown_content.length
+      payload.markdown_content = `[Markdown truncated for display — ${len} characters. Enable "Include markdown" to see full text.]`
+    }
+    return payload
+  }, [data, jsonIncludeMarkdown])
+
+  const jsonDisplayString = useMemo(() => JSON.stringify(jsonDisplayPayload, null, 2), [jsonDisplayPayload])
+
+  const handleCopyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2))
+      setJsonCopied(true)
+      setTimeout(() => setJsonCopied(false), 2000)
+    } catch (err) {
+      console.error('Copy failed:', err)
+    }
+  }
+
   // Update graph dimensions when container size changes
   useEffect(() => {
     const updateDimensions = () => {
@@ -90,7 +115,49 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
             <h2>Knowledge Graph</h2>
             <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.9rem', color: 'var(--text-muted, #6b7280)' }}>
               {document_name}
+              {ingestionOnly && (
+                <span className="knowledge-graph-badge" title="Only questions from document ingestion (Concept JSON)">
+                  Raw KG
+                </span>
+              )}
             </p>
+            {showIngestionToggle && (
+              <div className="knowledge-graph-view-toggle" style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted, #6b7280)' }}>View:</span>
+                <button
+                  type="button"
+                  className={!ingestionOnly ? 'active' : ''}
+                  onClick={() => onSwitchMode(false)}
+                  style={{
+                    padding: '0.25rem 0.5rem',
+                    fontSize: '0.8rem',
+                    border: '1px solid var(--border, #e5e7eb)',
+                    borderRadius: '4px',
+                    background: !ingestionOnly ? 'var(--primary, #6366f1)' : 'transparent',
+                    color: !ingestionOnly ? 'white' : 'inherit',
+                    cursor: 'pointer',
+                  }}
+                >
+                  All questions
+                </button>
+                <button
+                  type="button"
+                  className={ingestionOnly ? 'active' : ''}
+                  onClick={() => onSwitchMode(true)}
+                  style={{
+                    padding: '0.25rem 0.5rem',
+                    fontSize: '0.8rem',
+                    border: '1px solid var(--border, #e5e7eb)',
+                    borderRadius: '4px',
+                    background: ingestionOnly ? 'var(--primary, #6366f1)' : 'transparent',
+                    color: ingestionOnly ? 'white' : 'inherit',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Ingestion only (raw KG)
+                </button>
+              </div>
+            )}
           </div>
           <button className="knowledge-graph-close" onClick={onClose} title="Close">Close</button>
         </div>
@@ -125,6 +192,12 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
             onClick={() => setActiveTab('skills')}
           >
             Skills ({skills.length})
+          </button>
+          <button 
+            className={activeTab === 'json' ? 'active' : ''}
+            onClick={() => setActiveTab('json')}
+          >
+            JSON
           </button>
         </div>
 
@@ -371,6 +444,34 @@ export default function KnowledgeGraphViewer({ data, onClose, userRole = null })
                   </div>
                 ))
               )}
+            </div>
+          )}
+
+          {activeTab === 'json' && (
+            <div className="knowledge-graph-json-view">
+              <div className="knowledge-graph-json-toolbar">
+                {data.markdown_content && (
+                  <label className="knowledge-graph-json-option">
+                    <input
+                      type="checkbox"
+                      checked={jsonIncludeMarkdown}
+                      onChange={(e) => setJsonIncludeMarkdown(e.target.checked)}
+                    />
+                    <span>Include full markdown</span>
+                  </label>
+                )}
+                <button
+                  type="button"
+                  className="knowledge-graph-json-copy"
+                  onClick={handleCopyJson}
+                  title="Copy full JSON to clipboard"
+                >
+                  {jsonCopied ? 'Copied!' : 'Copy JSON'}
+                </button>
+              </div>
+              <pre className="knowledge-graph-json-pre">
+                <code className="knowledge-graph-json-code">{jsonDisplayString}</code>
+              </pre>
             </div>
           )}
         </div>

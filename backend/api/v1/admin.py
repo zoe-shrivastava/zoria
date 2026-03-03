@@ -230,13 +230,16 @@ async def reprocess_document(
 @router.get("/documents/{document_id}/knowledge-graph")
 async def get_document_knowledge_graph(
     document_id: str,
+    ingestion_only: bool = Query(False, description="If true, return only data from document ingestion (concepts, relationships, questions from Concept JSON). Excludes later-generated questions."),
     admin: dict = Depends(get_current_admin)
 ):
     """Get knowledge graph data for a document (admin only).
     
     GET /api/v1/admin/documents/{document_id}/knowledge-graph
+    GET /api/v1/admin/documents/{document_id}/knowledge-graph?ingestion_only=true
     
     Returns concepts, relationships, skills, and questions for the document.
+    Use ingestion_only=true to see the raw KG at ingestion time (only questions created from Concept JSON).
     """
     try:
         import uuid as uuid_module
@@ -300,38 +303,54 @@ async def get_document_knowledge_graph(
             )
         
         # Get questions for concepts - ONLY from this document
-        # Questions now store document_id in metadata, so we can filter by that.
-        # For backward compatibility: if document_id is NULL in metadata, only show questions
-        # if the concept was originally created for this document (c.document_id = $2).
+        # When ingestion_only=True: only questions with metadata.source = 'concept_extraction' (created at ingestion).
+        # Otherwise: all questions for this document (including later-generated ones).
         questions = []
         if concept_ids:
             concept_uuids = [uuid_module.UUID(cid) for cid in concept_ids]
             document_uuid = uuid_module.UUID(document_id)
             document_id_str = str(document_id)
-            questions = await db.fetch(
-                """
-                SELECT DISTINCT
-                    q.id,
-                    q.concept_id,
-                    q.text,
-                    q.type,
-                    q.difficulty,
-                    c.name as concept_name
-                FROM questions q
-                JOIN concepts c ON q.concept_id = c.id
-                LEFT JOIN document_concepts dc ON c.id = dc.concept_id
-                WHERE q.concept_id = ANY($1::uuid[])
-                  AND (
-                    -- New questions: check metadata->>'document_id'
-                    q.metadata->>'document_id' = $3
-                    OR
-                    -- Old questions (backward compatibility): only if concept was created for this document
-                    (q.metadata->>'document_id' IS NULL AND c.document_id = $2)
-                  )
-                ORDER BY c.name, q.difficulty
-                """,
-                concept_uuids, document_uuid, document_id_str
-            )
+            if ingestion_only:
+                questions = await db.fetch(
+                    """
+                    SELECT DISTINCT
+                        q.id,
+                        q.concept_id,
+                        q.text,
+                        q.type,
+                        q.difficulty,
+                        c.name as concept_name
+                    FROM questions q
+                    JOIN concepts c ON q.concept_id = c.id
+                    WHERE q.concept_id = ANY($1::uuid[])
+                      AND q.metadata->>'source' = 'concept_extraction'
+                    ORDER BY c.name, q.difficulty
+                    """,
+                    concept_uuids
+                )
+            else:
+                questions = await db.fetch(
+                    """
+                    SELECT DISTINCT
+                        q.id,
+                        q.concept_id,
+                        q.text,
+                        q.type,
+                        q.difficulty,
+                        c.name as concept_name
+                    FROM questions q
+                    JOIN concepts c ON q.concept_id = c.id
+                    LEFT JOIN document_concepts dc ON c.id = dc.concept_id
+                    WHERE q.concept_id = ANY($1::uuid[])
+                      AND (
+                        q.metadata->>'document_id' = $3
+                        OR
+                        (q.metadata->>'document_id' IS NULL AND c.document_id = $2)
+                      )
+                    ORDER BY c.name, q.difficulty
+                    """,
+                    concept_uuids, document_uuid, document_id_str
+                )
         
         # Get skills linked to questions
         skills = []
@@ -363,6 +382,7 @@ async def get_document_knowledge_graph(
             "document_id": document_id,
             "document_name": document.get("filename"),
             "status": document.get("status"),
+            "ingestion_only": ingestion_only,
             "markdown_content": full_document.get("markdown_content") if full_document else None,
             "concepts_json": full_document.get("concepts") if full_document else None,
             "concepts": [

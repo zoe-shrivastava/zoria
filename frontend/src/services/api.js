@@ -231,8 +231,12 @@ export const admin = {
       body: JSON.stringify({ cleanup_existing: cleanupExisting, skip_phase1: skipPhase1 }),
     }),
 
-  getKnowledgeGraph: (documentId) =>
-    apiRequest(`/api/v1/admin/documents/${documentId}/knowledge-graph`, { method: 'GET' }),
+  getKnowledgeGraph: (documentId, ingestionOnly = false) => {
+    const url = ingestionOnly
+      ? `/api/v1/admin/documents/${documentId}/knowledge-graph?ingestion_only=true`
+      : `/api/v1/admin/documents/${documentId}/knowledge-graph`
+    return apiRequest(url, { method: 'GET' })
+  },
 
   // Children management
   listChildren: () =>

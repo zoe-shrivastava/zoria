@@ -128,7 +128,10 @@ class KnowledgeGraphService:
             List of concept IDs (newly created or existing)
         """
         concept_ids = []
-        
+        name_to_id: Dict[str, str] = {}  # concept name -> concept_id (current document only)
+        processed: List[tuple] = []  # (concept_data, concept_id) for pass 2
+
+        # Pass 1: create/link concepts and build name_to_id for this document
         for concept_data in concepts:
             concept_data = self._normalize_concept_dict(concept_data)
             if not concept_data.get("name"):
@@ -175,12 +178,17 @@ class KnowledgeGraphService:
                 logger.info(f"Created new concept: {concept_data.get('name')} -> {concept_id}")
             
             concept_ids.append(concept_id)
-            
-            # Create prerequisite relationships
+            cname = (concept_data.get("name") or "").strip()
+            if cname:
+                name_to_id[cname] = concept_id
+            processed.append((concept_data, concept_id))
+
+        # Pass 2: create prerequisite relationships only within this document (child boundary)
+        for concept_data, concept_id in processed:
             await self._create_prerequisite_relationships(
                 concept_id,
                 concept_data.get("prerequisites", []),
-                concepts
+                name_to_id
             )
         
         return concept_ids
@@ -299,40 +307,33 @@ class KnowledgeGraphService:
         self,
         concept_id: str,
         prerequisites: List[str],
-        all_concepts: List[Dict[str, Any]]
+        name_to_id: Dict[str, str]
     ) -> None:
         """Create prerequisite relationships for a concept.
+        
+        Only links to concepts in the current document (name_to_id). Never crosses
+        child/document boundary.
         
         Args:
             concept_id: Concept UUID
             prerequisites: List of prerequisite concept names
-            all_concepts: All concepts from current document (for name resolution)
+            name_to_id: Map of concept name -> concept_id for current document only
         """
         if not prerequisites:
             return
         
-        # Find prerequisite concept IDs
         for prereq_name in prerequisites:
-            # First, check in current document's concepts
-            prereq_concept = None
-            for concept in all_concepts:
-                if concept.get("name") == prereq_name:
-                    # This concept should already be processed
-                    prereq_concept = await self.concept_repo.find_similar_concept(
-                        name=prereq_name
-                    )
-                    break
-            
-            # If not found in current document, search all concepts
-            if not prereq_concept:
-                prereq_concept = await self.concept_repo.find_similar_concept(
-                    name=prereq_name
-                )
-            
-            if prereq_concept:
-                prereq_id = prereq_concept["id"]
-                
-                # Create relationship
+            prereq_name_clean = (prereq_name or "").strip()
+            if not prereq_name_clean:
+                continue
+            prereq_id = name_to_id.get(prereq_name_clean)
+            if not prereq_id:
+                # Also try case-insensitive match within document
+                for name, cid in name_to_id.items():
+                    if name.lower() == prereq_name_clean.lower():
+                        prereq_id = cid
+                        break
+            if prereq_id:
                 await self.db.execute(
                     """
                     INSERT INTO concept_relationships 
@@ -343,12 +344,12 @@ class KnowledgeGraphService:
                     prereq_id, concept_id
                 )
                 logger.debug(
-                    f"Created prerequisite relationship: {prereq_name} -> {concept_id}"
+                    f"Created prerequisite relationship: {prereq_name_clean} -> {concept_id}"
                 )
             else:
                 logger.warning(
-                    f"Prerequisite concept not found: {prereq_name} "
-                    f"(for concept {concept_id})"
+                    f"Prerequisite concept not found in document: {prereq_name_clean} "
+                    f"(for concept {concept_id}); only linking within same document."
                 )
     
     async def create_skill_from_question(
