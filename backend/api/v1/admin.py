@@ -1,12 +1,15 @@
 """Admin API endpoints."""
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query
-from typing import List, Optional
+import json
 from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 
 from schemas.user import ParentCreate, ParentResponse, ChildResponse
 from schemas.document import DocumentListResponse, DocumentResponse
 from schemas.llm_log import LLMLogListResponse, LLMUsageStatsResponse
+from schemas.admin_settings import TimestampSettings
 from services.user_service import UserService
 from services.document_service import DocumentService
 from services.llm_logging_service import LLMLoggingService
@@ -440,6 +443,83 @@ async def get_document_knowledge_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get knowledge graph: {str(e)}"
         )
+
+
+def _is_undefined_table_error(exc: Exception) -> bool:
+    """True if the exception is asyncpg 'relation does not exist'."""
+    return getattr(exc, "__class__", None).__name__ == "UndefinedTableError" or (
+        "admin_settings" in str(exc) and "does not exist" in str(exc).lower()
+    )
+
+
+@router.get("/settings/timestamps", response_model=TimestampSettings)
+async def get_timestamp_settings(
+    admin: dict = Depends(get_current_admin),
+    db: Database = Depends(get_db),
+):
+    """Get admin-configurable timestamp display settings.
+
+    GET /api/v1/admin/settings/timestamps
+    If admin_settings table is missing, returns defaults (run migration 013_admin_settings.sql).
+    """
+    if db.pool is None:
+        await db.connect()
+
+    try:
+        row = await db.fetchrow(
+            "SELECT value FROM admin_settings WHERE key = 'timestamp_settings'"
+        )
+    except Exception as e:
+        if _is_undefined_table_error(e):
+            return TimestampSettings()
+        raise
+
+    if not row or row.get("value") is None:
+        return TimestampSettings()
+
+    value = row["value"]
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else {}
+    if not isinstance(value, dict):
+        value = {}
+    return TimestampSettings(**value)
+
+
+@router.put("/settings/timestamps", response_model=TimestampSettings)
+async def update_timestamp_settings(
+    settings: TimestampSettings,
+    admin: dict = Depends(get_current_admin),
+    db: Database = Depends(get_db),
+):
+    """Update admin-configurable timestamp display settings.
+
+    PUT /api/v1/admin/settings/timestamps
+    Requires admin_settings table (run migration 013_admin_settings.sql).
+    """
+    if db.pool is None:
+        await db.connect()
+
+    try:
+        await db.execute(
+            """
+            INSERT INTO admin_settings (key, value)
+            VALUES ('timestamp_settings', $1::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            json.dumps(settings.dict()),
+        )
+    except Exception as e:
+        if _is_undefined_table_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Database migration required for display settings. "
+                    "Run: backend/database/migrations/013_admin_settings.sql"
+                ),
+            ) from e
+        raise
+
+    return settings
 
 
 # LLM Logs endpoints for admin

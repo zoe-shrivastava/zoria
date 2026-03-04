@@ -16,6 +16,7 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   const [loadingGuides, setLoadingGuides] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerContext, setDrawerContext] = useState(null)
+  const [showGuideTimestamps, setShowGuideTimestamps] = useState(true)
   const [coachOpen, setCoachOpen] = useState(false)
   const [coachGuideId, setCoachGuideId] = useState(null)
   const [coachContext, setCoachContext] = useState(null)
@@ -104,6 +105,30 @@ export default function EvaluationReport({ childId, daysBack = 30, showAllGuides
   useEffect(() => {
     console.log('Drawer state changed:', { drawerOpen, drawerContext })
   }, [drawerOpen, drawerContext])
+
+  // Normalize: only show timestamps when explicitly true
+  const applyGuideTimestampSetting = (val) =>
+    setShowGuideTimestamps(val === true || val === 'true')
+
+  // Load timestamp display settings (admin-configured for all roles); refetch when page becomes visible
+  useEffect(() => {
+    const loadTimestampSettings = async () => {
+      try {
+        const { auth } = await import('../services/api')
+        const settings = await auth.getTimestampSettings()
+        applyGuideTimestampSetting(settings?.show_study_guide_timestamps)
+      } catch (error) {
+        console.error('Failed to load timestamp settings for study guides:', error)
+        setShowGuideTimestamps(true)
+      }
+    }
+    loadTimestampSettings()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadTimestampSettings()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   // Poll for study guide completion when report has placeholders (generating: true, no guide_id yet)
   const hasGeneratingGuides = report?.study_guide_links?.some(l => l.generating && !l.guide_id)

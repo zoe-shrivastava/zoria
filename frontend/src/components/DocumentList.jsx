@@ -14,6 +14,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
   const [showConceptsModal, setShowConceptsModal] = useState(false)
   const [selectedDocumentData, setSelectedDocumentData] = useState(null)
   const [childrenMap, setChildrenMap] = useState({}) // Map child_id to child name
+  const [showTimestamps, setShowTimestamps] = useState(true)
 
   useEffect(() => {
     if (childId || isChild || userRole === 'admin') {
@@ -27,6 +28,30 @@ export default function DocumentList({ childId, isChild = false, userRole = null
       loadChildren()
     }
   }, [userRole])
+
+  // Normalize API value: only show timestamps when explicitly true (hide for false or string "false")
+  const applyDocTimestampSetting = (val) =>
+    setShowTimestamps(val === true || val === 'true')
+
+  // Load timestamp display settings (admin-configured for all roles); refetch when page becomes visible
+  useEffect(() => {
+    const loadTimestampSettings = async () => {
+      try {
+        const { auth } = await import('../services/api')
+        const settings = await auth.getTimestampSettings()
+        applyDocTimestampSetting(settings?.show_document_timestamps)
+      } catch (error) {
+        console.error('Failed to load timestamp settings for documents:', error)
+        setShowTimestamps(true)
+      }
+    }
+    loadTimestampSettings()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadTimestampSettings()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   const loadChildren = async () => {
     try {
@@ -354,7 +379,9 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                 {doc.filename || 'Untitled Document'}
               </div>
               <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.25rem', flexWrap: 'wrap' }}>
-                <span>Uploaded: {formatDate(doc.uploaded_at)}</span>
+                {showTimestamps && (
+                  <span>Uploaded: {formatDate(doc.uploaded_at)}</span>
+                )}
                 {doc.status && getStatusBadge(doc.status)}
               </div>
               {/* Show linked children for admin users */}

@@ -183,6 +183,10 @@ export const auth = {
 
   getMe: () =>
     apiRequest('/api/v1/auth/me', { method: 'GET' }),
+
+  /** Timestamp display settings (admin-configured, applies to all roles). Any authenticated user can read. */
+  getTimestampSettings: () =>
+    apiRequest('/api/v1/auth/settings/timestamps', { method: 'GET' }),
 }
 
 /**
@@ -266,6 +270,16 @@ export const admin = {
     const query = queryParams.toString()
     return apiRequest(`/api/v1/admin/llm-logs/stats${query ? '?' + query : ''}`, { method: 'GET' })
   },
+
+  // Admin display / timestamp settings
+  getTimestampSettings: () =>
+    apiRequest('/api/v1/admin/settings/timestamps', { method: 'GET' }),
+
+  updateTimestampSettings: (settings) =>
+    apiRequest('/api/v1/admin/settings/timestamps', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
 }
 
 /**

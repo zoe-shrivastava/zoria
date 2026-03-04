@@ -8,10 +8,35 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
   const [loading, setLoading] = useState(true)
   const [reevaluating, setReevaluating] = useState({})
   const [reopening, setReopening] = useState({})
+  const [showTimestamps, setShowTimestamps] = useState(true)
 
   useEffect(() => {
     loadGroupedTests()
   }, [statusFilter, refreshKey])
+
+  // Normalize: only show timestamps when explicitly true
+  const applyTestTimestampSetting = (val) =>
+    setShowTimestamps(val === true || val === 'true')
+
+  // Load timestamp display settings (admin-configured for all roles); refetch when page becomes visible
+  useEffect(() => {
+    const loadTimestampSettings = async () => {
+      try {
+        const { auth } = await import('../services/api')
+        const settings = await auth.getTimestampSettings()
+        applyTestTimestampSetting(settings?.show_test_timestamps)
+      } catch (error) {
+        console.error('Failed to load timestamp settings for grouped tests:', error)
+        setShowTimestamps(true)
+      }
+    }
+    loadTimestampSettings()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadTimestampSettings()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   const loadGroupedTests = async () => {
     try {
@@ -291,9 +316,11 @@ export default function TestListGrouped({ statusFilter = null, onTestSelect, isA
                         )}
                       </div>
                       <h4 style={{ margin: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>{test.title}</h4>
-                      <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                        Created: {formatDate(test.created_at)}
-                      </div>
+                      {showTimestamps && (
+                        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                          Created: {formatDate(test.created_at)}
+                        </div>
+                      )}
                       {test.status === 'draft' && (
                         <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '0.25rem', fontStyle: 'italic' }}>
                           Generating questions...

@@ -9,10 +9,35 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
   const [deleting, setDeleting] = useState({})
   const [reevaluating, setReevaluating] = useState({})
   const [reopening, setReopening] = useState({})
+  const [showTimestamps, setShowTimestamps] = useState(true)
 
   useEffect(() => {
     loadTests()
   }, [childId, statusFilter, refreshKey])
+
+  // Normalize: only show timestamps when explicitly true
+  const applyTestTimestampSetting = (val) =>
+    setShowTimestamps(val === true || val === 'true')
+
+  // Load timestamp display settings (admin-configured for all roles); refetch when page becomes visible
+  useEffect(() => {
+    const loadTimestampSettings = async () => {
+      try {
+        const { auth } = await import('../services/api')
+        const settings = await auth.getTimestampSettings()
+        applyTestTimestampSetting(settings?.show_test_timestamps)
+      } catch (error) {
+        console.error('Failed to load timestamp settings for tests:', error)
+        setShowTimestamps(true)
+      }
+    }
+    loadTimestampSettings()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadTimestampSettings()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   // Poll for draft tests to check if they've completed
   useEffect(() => {
@@ -264,9 +289,11 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.75rem' }}>
             <div style={{ flex: 1 }}>
               <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{test.title}</h3>
-              <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                Created: {formatDate(test.created_at)}
-              </div>
+              {showTimestamps && (
+                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  Created: {formatDate(test.created_at)}
+                </div>
+              )}
               {test.status === 'draft' && (
                 <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '0.25rem', fontStyle: 'italic' }}>
                   Generating questions...
@@ -364,7 +391,7 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
                 Score: {test.total_score}/{test.max_score} 
                 ({test.max_score > 0 ? ((test.total_score / test.max_score) * 100).toFixed(1) : 0}%)
               </div>
-              {test.completed_at && (
+              {showTimestamps && test.completed_at && (
                 <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                   Completed: {formatDate(test.completed_at)}
                 </div>
@@ -372,7 +399,7 @@ export default function TestList({ childId, onTestSelect, statusFilter = null, i
             </div>
           )}
 
-          {test.status === 'active' && test.started_at && (
+          {showTimestamps && test.status === 'active' && test.started_at && (
             <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
               Started: {formatDate(test.started_at)}
             </div>

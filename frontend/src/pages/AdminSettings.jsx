@@ -12,9 +12,16 @@ export default function AdminSettings({ user, onLogout, onNavigateToDashboard })
   const [newParentEmail, setNewParentEmail] = useState('')
   const [newParentPassword, setNewParentPassword] = useState('')
   const [newParentRole, setNewParentRole] = useState('parent')
+  const [timestampSettings, setTimestampSettings] = useState({
+    show_document_timestamps: true,
+    show_test_timestamps: true,
+    show_study_guide_timestamps: true,
+  })
+  const [savingTimestamps, setSavingTimestamps] = useState(false)
 
   useEffect(() => {
     loadParents()
+    loadTimestampSettings()
   }, [])
 
   const loadParents = async () => {
@@ -28,6 +35,21 @@ export default function AdminSettings({ user, onLogout, onNavigateToDashboard })
       }
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadTimestampSettings = async () => {
+    try {
+      const data = await admin.getTimestampSettings()
+      setTimestampSettings({
+        show_document_timestamps: data?.show_document_timestamps ?? true,
+        show_test_timestamps: data?.show_test_timestamps ?? true,
+        show_study_guide_timestamps: data?.show_study_guide_timestamps ?? true,
+      })
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to load timestamp settings', 'error')
+      }
     }
   }
 
@@ -64,6 +86,21 @@ export default function AdminSettings({ user, onLogout, onNavigateToDashboard })
       if (!isAuthError(error)) {
         showNotification(error.message || 'Failed to deactivate parent', 'error')
       }
+    }
+  }
+
+  const handleSaveTimestampSettings = async (e) => {
+    e.preventDefault()
+    try {
+      setSavingTimestamps(true)
+      await admin.updateTimestampSettings(timestampSettings)
+      showNotification('Display settings saved', 'success')
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to save display settings', 'error')
+      }
+    } finally {
+      setSavingTimestamps(false)
     }
   }
 
@@ -231,6 +268,63 @@ export default function AdminSettings({ user, onLogout, onNavigateToDashboard })
                 ))}
               </div>
             )}
+          </div>
+
+          <div style={{ marginBottom: '2rem', marginTop: '1.5rem' }}>
+            <h3 style={{ marginBottom: '1rem' }}>Display Settings</h3>
+            <p className="section-description" style={{ marginBottom: '1rem' }}>
+              Control whether timestamps are shown in admin views for documents, tests, and study guides.
+            </p>
+            <form onSubmit={handleSaveTimestampSettings} style={{ maxWidth: '480px', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                <input
+                  type="checkbox"
+                  checked={timestampSettings.show_document_timestamps}
+                  onChange={(e) =>
+                    setTimestampSettings(prev => ({
+                      ...prev,
+                      show_document_timestamps: e.target.checked,
+                    }))
+                  }
+                />
+                <span>Show document upload & processing timestamps</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                <input
+                  type="checkbox"
+                  checked={timestampSettings.show_test_timestamps}
+                  onChange={(e) =>
+                    setTimestampSettings(prev => ({
+                      ...prev,
+                      show_test_timestamps: e.target.checked,
+                    }))
+                  }
+                />
+                <span>Show test creation timestamps</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                <input
+                  type="checkbox"
+                  checked={timestampSettings.show_study_guide_timestamps}
+                  onChange={(e) =>
+                    setTimestampSettings(prev => ({
+                      ...prev,
+                      show_study_guide_timestamps: e.target.checked,
+                    }))
+                  }
+                />
+                <span>Show study guide generated timestamps</span>
+              </label>
+              <div style={{ marginTop: '1rem' }}>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={savingTimestamps}
+                >
+                  {savingTimestamps ? 'Saving…' : 'Save display settings'}
+                </button>
+              </div>
+            </form>
           </div>
             </>
           )}
