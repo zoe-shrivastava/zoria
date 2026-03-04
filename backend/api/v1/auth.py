@@ -1,5 +1,6 @@
 """Authentication API endpoints."""
 
+import json
 import logging
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 from fastapi.security import HTTPBearer
@@ -8,9 +9,10 @@ from schemas.auth import (
     LoginRequest, LoginResponse, ChildLoginRequest,
     CompleteMFASetupRequest
 )
+from schemas.admin_settings import TimestampSettings
 from services.auth_service import AuthService
 from core.dependencies import get_current_user, get_database
-from core.database import Database
+from core.database import Database, get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -134,3 +136,44 @@ async def get_current_user_info(
         "user": user,
         "role": role
     }
+
+
+def _is_undefined_table_error(exc: Exception) -> bool:
+    """True if the exception is asyncpg 'relation does not exist'."""
+    return getattr(exc, "__class__", None).__name__ == "UndefinedTableError" or (
+        "admin_settings" in str(exc) and "does not exist" in str(exc).lower()
+    )
+
+
+@router.get("/settings/timestamps", response_model=TimestampSettings)
+async def get_timestamp_display_settings(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Get timestamp display settings (admin-configured, applies to all roles).
+
+    GET /api/v1/auth/settings/timestamps
+    Any authenticated user (parent, child, admin) can read. If admin_settings
+    table is missing, returns defaults.
+    """
+    if db.pool is None:
+        await db.connect()
+
+    try:
+        row = await db.fetchrow(
+            "SELECT value FROM admin_settings WHERE key = 'timestamp_settings'"
+        )
+    except Exception as e:
+        if _is_undefined_table_error(e):
+            return TimestampSettings()
+        raise
+
+    if not row or row.get("value") is None:
+        return TimestampSettings()
+
+    value = row["value"]
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else {}
+    if not isinstance(value, dict):
+        value = {}
+    return TimestampSettings(**value)
