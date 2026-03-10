@@ -15,6 +15,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
   const [selectedDocumentData, setSelectedDocumentData] = useState(null)
   const [childrenMap, setChildrenMap] = useState({}) // Map child_id to child name
   const [showTimestamps, setShowTimestamps] = useState(true)
+  const [kgRebuildDocs, setKgRebuildDocs] = useState(new Set())
 
   useEffect(() => {
     if (childId || isChild || userRole === 'admin') {
@@ -181,6 +182,32 @@ export default function DocumentList({ childId, isChild = false, userRole = null
       }
     } finally {
       setProcessingDocs(prev => {
+        const next = new Set(prev)
+        next.delete(docId)
+        return next
+      })
+    }
+  }
+  
+  const handleRebuildKnowledgeGraph = async (docId) => {
+    if (!window.confirm(
+      'This will rebuild the knowledge graph (concepts, relationships, questions, chunks, embeddings) from existing markdown/concept JSON.\n\nIt will NOT re-parse the original PDF.\n\nContinue?'
+    )) {
+      return
+    }
+
+    try {
+      setKgRebuildDocs(prev => new Set(prev).add(docId))
+      const { admin } = await import('../services/api')
+      await admin.rebuildKnowledgeGraph(docId)
+      showNotification('Knowledge graph rebuild started', 'success')
+      loadDocuments()
+    } catch (error) {
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to rebuild knowledge graph', 'error')
+      }
+    } finally {
+      setKgRebuildDocs(prev => {
         const next = new Set(prev)
         next.delete(docId)
         return next
@@ -448,7 +475,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               {(() => {
-                const isProcessing = doc.status === 'processing' || processingDocs.has(doc.id)
+                const isProcessing = doc.status === 'processing' || processingDocs.has(doc.id) || kgRebuildDocs.has(doc.id)
                 return (
                   <>
                     {/* Show reprocess button only for admin, not for parent */}
@@ -482,6 +509,20 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                           }}
                         >
                           View Graph
+                        </button>
+                        <button
+                          onClick={() => handleRebuildKnowledgeGraph(doc.id)}
+                          disabled={isProcessing}
+                          className="btn-secondary btn-small"
+                          style={{ 
+                            background: 'var(--warning-bg, #ffc107)', 
+                            color: 'white',
+                            opacity: isProcessing ? 0.6 : 1,
+                            cursor: isProcessing ? 'not-allowed' : 'pointer'
+                          }}
+                          title="Rebuild knowledge graph from existing markdown/concepts"
+                        >
+                          Rebuild KG
                         </button>
                         <button
                           onClick={() => handleViewMarkdown(doc.id)}

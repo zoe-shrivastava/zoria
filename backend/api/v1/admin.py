@@ -16,6 +16,7 @@ from services.llm_logging_service import LLMLoggingService
 from core.dependencies import get_current_admin
 from core.database import get_db, Database
 from database.repositories.test_repository import TestRepository
+from core.background_tasks import enqueue_document_processing
 
 router = APIRouter()
 
@@ -442,6 +443,62 @@ async def get_document_knowledge_graph(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get knowledge graph: {str(e)}"
+        )
+
+
+@router.post("/documents/{document_id}/rebuild-knowledge-graph")
+async def rebuild_document_knowledge_graph(
+    document_id: str,
+    admin: dict = Depends(get_current_admin),
+):
+    """Rebuild knowledge graph and downstream data from existing markdown/concepts (admin only).
+
+    POST /api/v1/admin/documents/{document_id}/rebuild-knowledge-graph
+
+    This endpoint:
+    - Requires that the document already has markdown_content and concepts JSON
+    - Cleans up existing Phase 2/3 data (chunks, questions, visuals, relationships, document_concepts, concepts)
+    - Re-runs the background processing pipeline (knowledge graph, questions, chunks, embeddings)
+      using the existing markdown/concepts JSON without re-parsing the original PDF.
+    """
+    try:
+        document_service = DocumentService()
+
+        # Ensure document exists and admin has access
+        document = await document_service.get_document(
+            document_id=document_id,
+            user_id=None,
+            user_role="admin",
+        )
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+
+        # Validate that we have the data needed for Phase 2
+        if not document.get("markdown_content") or not document.get("concepts"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Document is missing markdown or concepts JSON; run full reprocess first.",
+            )
+
+        # Set status to processing and enqueue background KG rebuild with cleanup
+        await document_service.document_repo.update_status(document_id, "processing")
+        await enqueue_document_processing(document_id, cleanup_first=True)
+
+        return {
+            "document_id": document_id,
+            "filename": document.get("filename"),
+            "status": "processing",
+            "message": "Knowledge graph rebuild started from existing markdown/concepts JSON",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to rebuild knowledge graph: {str(e)}",
         )
 
 

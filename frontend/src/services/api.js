@@ -235,6 +235,11 @@ export const admin = {
       body: JSON.stringify({ cleanup_existing: cleanupExisting, skip_phase1: skipPhase1 }),
     }),
 
+  rebuildKnowledgeGraph: (documentId) =>
+    apiRequest(`/api/v1/admin/documents/${documentId}/rebuild-knowledge-graph`, {
+      method: 'POST',
+    }),
+
   getKnowledgeGraph: (documentId, ingestionOnly = false) => {
     const url = ingestionOnly
       ? `/api/v1/admin/documents/${documentId}/knowledge-graph?ingestion_only=true`
