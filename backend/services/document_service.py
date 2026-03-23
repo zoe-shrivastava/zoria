@@ -355,12 +355,16 @@ class DocumentService:
             logger.info(f"Starting cleanup for document {document_id}...")
             from workers.document_processor import DocumentProcessor
             processor = DocumentProcessor()
-            await processor.db.connect()
+            if processor.db.pool is None:
+                await processor.db.connect()
             try:
                 await processor.cleanup_document_data(document_id)
                 logger.info(f"Cleanup completed for document {document_id}")
             finally:
-                await processor.db.close()
+                # Never close the shared app DB pool; only close if this processor
+                # created its own standalone DB instance.
+                if getattr(processor, "_owns_db", False):
+                    await processor.db.close()
             # Re-read document after cleanup so Phase 1 decision uses current state
             document = await self.document_repo.get_document_by_id(document_id)
             has_markdown = bool(document.get("markdown_content"))

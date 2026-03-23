@@ -12,10 +12,16 @@ export default function DocumentList({ childId, isChild = false, userRole = null
   const [knowledgeGraphData, setKnowledgeGraphData] = useState(null)
   const [showMarkdownModal, setShowMarkdownModal] = useState(false)
   const [showConceptsModal, setShowConceptsModal] = useState(false)
+  const [showMdEvaluatorModal, setShowMdEvaluatorModal] = useState(false)
+  const [mdEvaluationResult, setMdEvaluationResult] = useState(null)
+  const [showKgEvaluatorModal, setShowKgEvaluatorModal] = useState(false)
+  const [kgEvaluationResult, setKgEvaluationResult] = useState(null)
   const [selectedDocumentData, setSelectedDocumentData] = useState(null)
   const [childrenMap, setChildrenMap] = useState({}) // Map child_id to child name
   const [showTimestamps, setShowTimestamps] = useState(true)
   const [kgRebuildDocs, setKgRebuildDocs] = useState(new Set())
+  const [evaluatingMdDocs, setEvaluatingMdDocs] = useState(new Set())
+  const [evaluatingKgDocs, setEvaluatingKgDocs] = useState(new Set())
 
   useEffect(() => {
     if (childId || isChild || userRole === 'admin') {
@@ -281,6 +287,48 @@ export default function DocumentList({ childId, isChild = false, userRole = null
     }
   }
 
+  const handleEvaluateMdConcepts = async (docId) => {
+    try {
+      setEvaluatingMdDocs(prev => new Set(prev).add(docId))
+      const { admin } = await import('../services/api')
+      const result = await admin.evaluateMarkdownToConcepts(docId)
+      setMdEvaluationResult(result)
+      setShowMdEvaluatorModal(true)
+    } catch (error) {
+      console.error('Error evaluating MD -> Concepts:', error)
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to evaluate MD -> Concepts', 'error')
+      }
+    } finally {
+      setEvaluatingMdDocs(prev => {
+        const updated = new Set(prev)
+        updated.delete(docId)
+        return updated
+      })
+    }
+  }
+
+  const handleEvaluateConceptsKg = async (docId) => {
+    try {
+      setEvaluatingKgDocs(prev => new Set(prev).add(docId))
+      const { admin } = await import('../services/api')
+      const result = await admin.evaluateConceptsToKnowledgeGraph(docId)
+      setKgEvaluationResult(result)
+      setShowKgEvaluatorModal(true)
+    } catch (error) {
+      console.error('Error evaluating Concepts -> KG:', error)
+      if (!isAuthError(error)) {
+        showNotification(error.message || 'Failed to evaluate Concepts -> KG', 'error')
+      }
+    } finally {
+      setEvaluatingKgDocs(prev => {
+        const updated = new Set(prev)
+        updated.delete(docId)
+        return updated
+      })
+    }
+  }
+
   const getStatusBadge = (status) => {
     const statusColors = {
       uploaded: { bg: '#fff3cd', color: '#856404' },
@@ -382,6 +430,26 @@ export default function DocumentList({ childId, isChild = false, userRole = null
       />,
       document.body
     )}
+    {showMdEvaluatorModal && mdEvaluationResult && createPortal(
+      <DocumentMdEvaluatorModal
+        result={mdEvaluationResult}
+        onClose={() => {
+          setShowMdEvaluatorModal(false)
+          setMdEvaluationResult(null)
+        }}
+      />,
+      document.body
+    )}
+    {showKgEvaluatorModal && kgEvaluationResult && createPortal(
+      <DocumentKgEvaluatorModal
+        result={kgEvaluationResult}
+        onClose={() => {
+          setShowKgEvaluatorModal(false)
+          setKgEvaluationResult(null)
+        }}
+      />,
+      document.body
+    )}
       <div className="document-list">
       <div style={{ marginBottom: '1rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
         {documentsList.length} {documentsList.length === 1 ? 'document' : 'documents'} uploaded
@@ -476,6 +544,8 @@ export default function DocumentList({ childId, isChild = false, userRole = null
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               {(() => {
                 const isProcessing = doc.status === 'processing' || processingDocs.has(doc.id) || kgRebuildDocs.has(doc.id)
+                const isEvaluatingMd = evaluatingMdDocs.has(doc.id)
+                const isEvaluatingKg = evaluatingKgDocs.has(doc.id)
                 return (
                   <>
                     {/* Show reprocess button only for admin, not for parent */}
@@ -541,7 +611,7 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                         </button>
                         <button
                           onClick={() => handleViewConcepts(doc.id)}
-                          disabled={isProcessing}
+                          disabled={isProcessing || isEvaluatingMd || isEvaluatingKg}
                           className="btn-secondary btn-small"
                           style={{ 
                             background: 'var(--warning-bg, #ffc107)', 
@@ -553,6 +623,36 @@ export default function DocumentList({ childId, isChild = false, userRole = null
                           title="View Concepts JSON"
                         >
                           Concepts
+                        </button>
+                        <button
+                          onClick={() => handleEvaluateMdConcepts(doc.id)}
+                          disabled={isProcessing || isEvaluatingMd || isEvaluatingKg}
+                          className="btn-secondary btn-small"
+                          style={{
+                            background: 'var(--primary-bg, #007bff)',
+                            color: 'white',
+                            fontSize: '0.85rem',
+                            opacity: (isProcessing || isEvaluatingMd || isEvaluatingKg) ? 0.6 : 1,
+                            cursor: (isProcessing || isEvaluatingMd || isEvaluatingKg) ? 'not-allowed' : 'pointer'
+                          }}
+                          title="Evaluate Markdown to Concepts"
+                        >
+                          {isEvaluatingMd ? 'Evaluating...' : 'Eval MD->Concepts'}
+                        </button>
+                        <button
+                          onClick={() => handleEvaluateConceptsKg(doc.id)}
+                          disabled={isProcessing || isEvaluatingMd || isEvaluatingKg}
+                          className="btn-secondary btn-small"
+                          style={{
+                            background: 'var(--secondary-bg, #6c757d)',
+                            color: 'white',
+                            fontSize: '0.85rem',
+                            opacity: (isProcessing || isEvaluatingMd || isEvaluatingKg) ? 0.6 : 1,
+                            cursor: (isProcessing || isEvaluatingMd || isEvaluatingKg) ? 'not-allowed' : 'pointer'
+                          }}
+                          title="Evaluate Concepts to Knowledge Graph"
+                        >
+                          {isEvaluatingKg ? 'Evaluating...' : 'Eval Concepts->KG'}
                         </button>
                       </>
                     )}
@@ -583,11 +683,53 @@ export default function DocumentList({ childId, isChild = false, userRole = null
 
 // Document Data Modal Component
 function DocumentDataModal({ type, content, filename, onClose }) {
-  const displayContent = type === 'concepts' 
-    ? (content ? JSON.stringify(content, null, 2) : 'No concepts data available')
+  const [copied, setCopied] = useState(false)
+
+  const conceptsJsonString = content ? JSON.stringify(content, null, 2) : null
+  const displayContent = type === 'concepts'
+    ? (conceptsJsonString ? conceptsJsonString : 'No concepts data available')
     : (content || 'No markdown content available')
-  
+
   const title = type === 'concepts' ? 'Concepts JSON' : 'Markdown Content'
+
+  const handleCopyConceptsJson = async () => {
+    if (!conceptsJsonString) return
+
+    try {
+      await navigator.clipboard.writeText(conceptsJsonString)
+      setCopied(true)
+      showNotification('Concepts JSON copied to clipboard!', 'success')
+      setTimeout(() => setCopied(false), 2000)
+      return
+    } catch (err) {
+      // Fallback for environments where clipboard API is unavailable/blocked.
+      try {
+        const textarea = document.createElement('textarea')
+        textarea.value = conceptsJsonString
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        textarea.style.top = '-9999px'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(textarea)
+
+        if (ok) {
+          setCopied(true)
+          showNotification('Concepts JSON copied to clipboard!', 'success')
+          setTimeout(() => setCopied(false), 2000)
+        } else {
+          console.error('Copy failed via fallback execCommand')
+          showNotification('Copy failed. Please try again.', 'error')
+        }
+      } catch (e) {
+        console.error('Copy failed:', e)
+        showNotification('Copy failed. Please try again.', 'error')
+      }
+    }
+  }
 
   return (
     <div className="document-data-modal-overlay" onClick={onClose}>
@@ -599,10 +741,187 @@ function DocumentDataModal({ type, content, filename, onClose }) {
               {filename}
             </p>
           </div>
-          <button className="document-data-close" onClick={onClose} title="Close">Close</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {type === 'concepts' && conceptsJsonString && (
+              <button
+                type="button"
+                className="document-data-copy-json"
+                onClick={handleCopyConceptsJson}
+                title="Copy Concepts JSON to clipboard"
+              >
+                {copied ? 'Copied!' : 'Copy JSON'}
+              </button>
+            )}
+            <button className="document-data-close" onClick={onClose} title="Close">Close</button>
+          </div>
         </div>
         <div className="document-data-content">
           <pre>{displayContent}</pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+async function copyJsonToClipboard(text) {
+  if (!text) return false
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch (_) {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      textarea.style.top = '-9999px'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      return !!ok
+    } catch {
+      return false
+    }
+  }
+}
+
+function DocumentMdEvaluatorModal({ result, onClose }) {
+  const [copied, setCopied] = useState(false)
+  const reportJsonString = result ? JSON.stringify(result, null, 2) : ''
+  const m2c = result?.report || {}
+  const m2cAttrs = m2c?.attributes || {}
+  const flags = m2c?.quality_flags || {}
+
+  const handleCopyReport = async () => {
+    const ok = await copyJsonToClipboard(reportJsonString)
+    if (ok) {
+      setCopied(true)
+      showNotification('Evaluator report copied to clipboard!', 'success')
+      setTimeout(() => setCopied(false), 2000)
+    } else {
+      showNotification('Copy failed. Please try again.', 'error')
+    }
+  }
+
+  return (
+    <div className="document-data-modal-overlay" onClick={onClose}>
+      <div className="document-data-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="document-data-header">
+          <div>
+            <h2>MD -> Concepts Evaluator</h2>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.9rem', color: 'var(--text-muted, #6b7280)' }}>
+              {result?.filename || 'Unknown file'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button
+              type="button"
+              className="document-data-copy-json"
+              onClick={handleCopyReport}
+              title="Copy evaluator report JSON"
+            >
+              {copied ? 'Copied!' : 'Copy Report'}
+            </button>
+            <button className="document-data-close" onClick={onClose} title="Close">Close</button>
+          </div>
+        </div>
+        <div className="document-data-content">
+          <div style={{ marginBottom: '1rem' }}><strong>Expected vs Actual</strong></div>
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+            Concepts: {m2cAttrs?.concepts?.expected ?? 0} / {m2cAttrs?.concepts?.actual ?? 0} |{' '}
+            Questions: {m2cAttrs?.questions?.expected ?? 0} / {m2cAttrs?.questions?.actual ?? 0} |{' '}
+            Unique Question Types: {m2cAttrs?.unique_question_types?.expected ?? 0} / {m2cAttrs?.unique_question_types?.actual ?? 0}
+          </div>
+          <div style={{ marginBottom: '1rem', fontSize: '0.95rem' }}>
+            Topic Count: {m2cAttrs?.topic_count?.expected ?? 0} / {m2cAttrs?.topic_count?.actual ?? 0} |{' '}
+            Subtopic Count: {m2cAttrs?.subtopic_count?.expected ?? 0} / {m2cAttrs?.subtopic_count?.actual ?? 0} |{' '}
+            Visual Description Links: {m2cAttrs?.visual_description_links?.expected ?? 0} / {m2cAttrs?.visual_description_links?.actual ?? 0}
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <strong>Flags:</strong>{' '}
+            {Object.entries(flags).map(([key, value]) => `${key}=${value}`).join(' | ') || 'none'}
+          </div>
+          <pre>{reportJsonString}</pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DocumentKgEvaluatorModal({ result, onClose }) {
+  const [copied, setCopied] = useState(false)
+  const reportJsonString = result ? JSON.stringify(result, null, 2) : ''
+  const c2kg = result?.report || {}
+  const c2kgAttrs = c2kg?.attributes || {}
+  const availability = c2kg?.availability || {}
+  const snapshot = c2kg?.snapshot || null
+
+  const handleCopyReport = async () => {
+    const ok = await copyJsonToClipboard(reportJsonString)
+    if (ok) {
+      setCopied(true)
+      showNotification('Evaluator report copied to clipboard!', 'success')
+      setTimeout(() => setCopied(false), 2000)
+    } else {
+      showNotification('Copy failed. Please try again.', 'error')
+    }
+  }
+
+  return (
+    <div className="document-data-modal-overlay" onClick={onClose}>
+      <div className="document-data-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="document-data-header">
+          <div>
+            <h2>Concepts -> KG Evaluator</h2>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.9rem', color: 'var(--text-muted, #6b7280)' }}>
+              {result?.filename || 'Unknown file'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button type="button" className="document-data-copy-json" onClick={handleCopyReport} title="Copy evaluator report JSON">
+              {copied ? 'Copied!' : 'Copy Report'}
+            </button>
+            <button className="document-data-close" onClick={onClose} title="Close">Close</button>
+          </div>
+        </div>
+        <div className="document-data-content">
+          <div style={{ marginBottom: '1rem' }}><strong>Expected vs Actual</strong></div>
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+            All Nodes: {c2kgAttrs?.all_nodes?.expected ?? 0} / {c2kgAttrs?.all_nodes?.actual ?? 0} |{' '}
+            All Edges: {c2kgAttrs?.all_edges?.expected ?? 0} / {c2kgAttrs?.all_edges?.actual ?? 0}
+          </div>
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+            Difficulty (expected): {JSON.stringify(c2kgAttrs?.difficulty?.expected || {})}
+          </div>
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+            Difficulty (actual): {JSON.stringify(c2kgAttrs?.difficulty?.actual || {})}
+          </div>
+          <div style={{ marginBottom: '1rem', fontSize: '0.95rem' }}>
+            Prerequisites (expected): {JSON.stringify(c2kgAttrs?.prerequisites?.expected || {})}
+            <br />
+            Prerequisites (actual): {JSON.stringify(c2kgAttrs?.prerequisites?.actual || {})}
+          </div>
+          <div style={{ marginBottom: '1rem', fontSize: '0.95rem' }}>
+            Mode: {snapshot?.id ? 'Snapshot' : 'Live KG'}
+            {snapshot?.id ? (
+              <>
+                {' '}| Snapshot ID: <code>{snapshot.id}</code>
+                {' '}| Run Type: {snapshot.run_type || 'unknown'}
+              </>
+            ) : (
+              <> | ingestion_only: {String(availability.ingestion_only ?? true)}</>
+            )}
+          </div>
+          {!availability.available && (
+            <div style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>
+              {availability.reason || 'Knowledge graph summary is not available yet.'}
+            </div>
+          )}
+          <pre>{reportJsonString}</pre>
         </div>
       </div>
     </div>

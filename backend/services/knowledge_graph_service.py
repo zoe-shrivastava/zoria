@@ -280,6 +280,15 @@ class KnowledgeGraphService:
         new_grade = set(new_concept_data.get("grade", []) or [])
         if new_grade - existing_grade:
             updates["grade"] = list(existing_grade | new_grade)
+
+        # Always overwrite difficulty from latest concepts JSON input.
+        # This keeps KG difficulty aligned with current extraction/evaluation runs.
+        if "difficulty" in new_concept_data:
+            incoming_difficulty = KnowledgeGraphService._normalize_difficulty(
+                new_concept_data.get("difficulty")
+            )
+            if (existing.get("difficulty") or "").strip().lower() != incoming_difficulty:
+                updates["difficulty"] = incoming_difficulty
         
         # Update subject in metadata if provided
         existing_metadata = existing.get("metadata") or {}
@@ -334,6 +343,12 @@ class KnowledgeGraphService:
                         prereq_id = cid
                         break
             if prereq_id:
+                if str(prereq_id) == str(concept_id):
+                    logger.debug(
+                        f"Skipping self-loop prerequisite relationship for concept {concept_id} "
+                        f"(prerequisite: {prereq_name_clean})"
+                    )
+                    continue
                 await self.db.execute(
                     """
                     INSERT INTO concept_relationships 

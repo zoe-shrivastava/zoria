@@ -81,12 +81,36 @@ export default function KnowledgeGraphViewer({ data, onClose, onSwitchMode, user
   const jsonDisplayString = useMemo(() => JSON.stringify(jsonDisplayPayload, null, 2), [jsonDisplayPayload])
 
   const handleCopyJson = async () => {
+    const textToCopy = jsonDisplayString
+    if (!textToCopy) return
     try {
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2))
+      await navigator.clipboard.writeText(textToCopy)
       setJsonCopied(true)
       setTimeout(() => setJsonCopied(false), 2000)
     } catch (err) {
-      console.error('Copy failed:', err)
+      // Fallback for environments where clipboard API is unavailable/blocked.
+      try {
+        const textarea = document.createElement('textarea')
+        textarea.value = textToCopy
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        textarea.style.top = '-9999px'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(textarea)
+
+        if (ok) {
+          setJsonCopied(true)
+          setTimeout(() => setJsonCopied(false), 2000)
+        } else {
+          console.error('Copy failed via fallback execCommand')
+        }
+      } catch (e) {
+        console.error('Copy failed:', e)
+      }
     }
   }
 

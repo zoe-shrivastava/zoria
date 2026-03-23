@@ -55,18 +55,27 @@ def run_in_background(coro: Callable) -> Callable:
     return wrapper
 
 
-async def enqueue_document_processing(document_id: str, cleanup_first: bool = False) -> None:
+async def enqueue_document_processing(
+    document_id: str,
+    cleanup_first: bool = False,
+    run_type: Optional[str] = None,
+) -> None:
     """Enqueue document for background processing.
     
     Args:
         document_id: Document UUID
         cleanup_first: If True, cleanup existing data before processing
+        run_type: Optional explicit run type for KG snapshot ('ingestion'|'rebuild'|'reprocess')
     """
     async def process_task():
         try:
             from workers.document_processor import DocumentProcessor
             processor = DocumentProcessor()
-            await processor.process_document(document_id, cleanup_first=cleanup_first)
+            await processor.process_document(
+                document_id,
+                cleanup_first=cleanup_first,
+                run_type=run_type,
+            )
         except Exception as e:
             logger.error(f"Background processing failed for document {document_id}: {e}", exc_info=True)
             raise
@@ -306,6 +315,7 @@ async def enqueue_test_generation_from_topics(
     num_questions: int,
     time_limit_minutes: Optional[int],
     language: Optional[str] = None,
+    question_types: Optional[list] = None,
 ) -> None:
     """Enqueue background test generation for subject/topics."""
     async def process_test():
@@ -337,6 +347,7 @@ async def enqueue_test_generation_from_topics(
                 num_questions=num_questions,
                 time_limit_minutes=time_limit_minutes,
                 language=language,
+                question_types=question_types,
             )
         except Exception as e:
             logger.error(f"Background topic-based test generation failed for test {test_id}: {e}", exc_info=True)

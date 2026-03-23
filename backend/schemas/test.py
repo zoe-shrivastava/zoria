@@ -7,6 +7,17 @@ from datetime import datetime
 from schemas.evaluation import BehavioralPayload
 
 
+# Canonical question types for tests (used in UI and backend)
+VALID_QUESTION_TYPES = [
+    "multiple_choice",
+    "short_answer",
+    "problem_solving",
+    "conceptual_question",
+    "matching",
+    "fill_in_the_blank",
+]
+
+
 class TestGenerateRequest(BaseModel):
     """Request to generate a test."""
     concept_id: Optional[str] = Field(None, description="Concept UUID to generate test from (legacy)")
@@ -18,6 +29,10 @@ class TestGenerateRequest(BaseModel):
     num_questions: int = Field(10, ge=1, le=50, description="Number of questions")
     time_limit_minutes: Optional[int] = Field(None, ge=1, description="Time limit in minutes")
     language: Optional[str] = Field(None, description="Language for generated questions (e.g. 'English', 'Hindi', 'Spanish')")
+    question_types: Optional[List[str]] = Field(
+        None,
+        description="Question types to include (e.g. multiple_choice, short_answer). Empty/None = all types."
+    )
 
 
 class QuestionGenerateRequest(BaseModel):

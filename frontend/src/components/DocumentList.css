@@ -80,6 +80,24 @@
   color: var(--text-primary, #111827);
 }
 
+.document-data-copy-json {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #111827);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.document-data-copy-json:hover {
+  background: var(--primary, #6366f1);
+  color: white;
+  border-color: var(--primary, #6366f1);
+}
+
 .document-data-content {
   flex: 1;
   overflow-y: auto;

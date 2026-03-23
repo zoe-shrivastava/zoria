@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Unique Concept Detail Parser</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 30px; background-color: #f4f7f6; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        textarea { width: 100%; height: 150px; margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace; }
+        button { padding: 12px 24px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        table { width: 100%; border-collapse: collapse; margin-top: 25px; background: white; }
+        th, td { border: 1px solid #ddd; padding: 15px; text-align: left; }
+        th { background-color: #343a40; color: white; text-transform: uppercase; letter-spacing: 1px; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; color: white; text-transform: uppercase;}
+        .easy { background: #2ecc71; }
+        .medium { background: #f1c40f; }
+        .hard { background: #e74c3c; }
+        .error { color: #d9534f; margin-top: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Knowledge Graph Ground-Truth Generator</h2>
+    <p>Paste your generated concepts JSON (or full KG JSON) to derive the prerequisite edges used by the backend.</p>
+    
+    <textarea id="jsonInput" placeholder="Paste your concepts.json here..."></textarea>
+    <br>
+    <button onclick="parseUniqueDetails()">Extract Unique Rows</button>
+    <button onclick="exportGroundTruth()" style="margin-left: 10px; background:#28a745;">Export Ground Truth JSON</button>
+    <label style="display:inline-flex; align-items:center; gap:8px; margin-left:12px; font-size:13px;">
+        <input type="checkbox" id="strictInputTruth" checked />
+        Strict input truth (ignore `relationships` field)
+    </label>
+    
+    <div id="errorLog" class="error"></div>
+
+    <div id="groundTruthArea" style="display:none; margin-top: 20px;">
+        <h3 style="margin-bottom: 10px;">Ground Truth (copy-ready)</h3>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom: 10px;">
+            <button type="button" onclick="copyGroundTruth()" style="background:#6f42c1;">Copy</button>
+            <span id="gtMeta" style="font-size: 13px; color:#6b7280;"></span>
+        </div>
+        <pre id="groundTruthPre" style="background:#111827; color:#e5e7eb; padding: 15px; border-radius: 8px; overflow:auto; max-height: 320px;"></pre>
+    </div>
+
+    <div style="margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
+        <h3 style="margin: 0 0 8px 0;">Compare With KG Output (Optional)</h3>
+        <p style="margin: 0 0 10px 0; font-size: 13px; color:#6b7280;">
+            Paste KG response JSON (from <code>/admin/documents/{id}/knowledge-graph</code>) to compare against strict input truth.
+        </p>
+        <textarea id="kgOutputInput" placeholder="Paste KG output JSON here (must include relationships[])"></textarea>
+        <br>
+        <label style="display:inline-flex; align-items:center; gap:8px; margin-right:12px; font-size:13px;">
+            <input type="checkbox" id="ignoreSelfLoops" checked />
+            Ignore self-loop edges
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:8px; margin-right:12px; font-size:13px;">
+            <input type="checkbox" id="restrictToTruthConcepts" checked />
+            Only compare edges between truth concepts
+        </label>
+        <button onclick="runComparison()" style="background:#0ea5e9;">Compare Truth vs Output</button>
+        <button onclick="copyDiffReport()" style="margin-left: 10px; background:#6f42c1;">Copy Diff</button>
+        <div id="diffMeta" style="margin-top: 10px; font-size: 13px; color:#6b7280;"></div>
+        <pre id="diffPre" style="display:none; margin-top:10px; background:#0f172a; color:#e2e8f0; padding: 15px; border-radius: 8px; overflow:auto; max-height: 320px;"></pre>
+    </div>
+
+    <table id="detailTable" style="display:none;">
+        <thead>
+            <tr>
+                <th>Concept</th>
+                <th>Category</th>
+                <th>Difficulty</th>
+                <th>Prerequisites</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+</div>
+
+<script>
+    // Normalize difficulty values to match backend allowed values.
+    function normalizeDifficulty(difficulty) {
+        const val = (difficulty ?? "").toString().trim().toLowerCase();
+        if (!val) return "medium";
+        if (val.includes("|")) {
+            const parts = val.split("|").map(p => p.trim());
+            for (const p of parts) {
+                if (p === "easy" || p === "medium" || p === "hard") return p;
+            }
+            return "medium";
+        }
+        if (val === "easy" || val === "medium" || val === "hard") return val;
+        return "medium";
+    }
+
+    function coerceToArray(val) {
+        if (Array.isArray(val)) return val;
+        if (typeof val === "string") {
+            // Allow JSON bugs where prerequisites were output as comma-separated text.
+            return val.split(",").map(s => s.trim()).filter(Boolean);
+        }
+        return [];
+    }
+
+    // Convert a prerequisite value into an array of prerequisite concept names.
+    // Supports:
+    // - ["Concept A", "Concept B"]
+    // - [{name:"Concept A"}, ...]
+    // - "Concept A, Concept B"
+    function coercePrerequisites(prereqVal) {
+        const arr = coerceToArray(prereqVal)
+        const out = []
+        arr.forEach(item => {
+            if (!item) return
+            if (typeof item === "string") {
+                const v = item.trim()
+                if (v) out.push(v)
+                return
+            }
+            if (typeof item === "object") {
+                const v =
+                    (item.name ?? item.concept_name ?? item.concept ?? item.title ?? item.value ?? "").toString().trim()
+                if (v) out.push(v)
+            }
+        })
+        return out
+    }
+
+    // Match backend's normalization enough to derive prerequisite edges.
+    // Backend logic (simplified):
+    // - If workflow doesn't provide "name", and provides "subtopic" + "topic_name",
+    //   it treats "subtopic" as the concept name and "topic_name" as the concept category.
+    // - prerequisite edges connect: prerequisite_concept_name -> concept_name.
+    function normalizeConceptForGroundTruth(item) {
+        const topicName = (item?.topic_name ?? item?.topic ?? "").toString().trim();
+        const subtopic = (item?.subtopic ?? "").toString().trim(); // concept name in workflow schema; category in KG response
+
+        // Backend KG response shape:
+        //   { name: "<concept>", subtopic: "<category>", prerequisites: [...] }
+        // Workflow/concept-extractor shape:
+        //   { subtopic: "<concept>", topic_name: "<category>", prerequisites: [...] }
+        const conceptName =
+            (item?.name ?? "").toString().trim() ||
+            (subtopic || "").toString().trim() ||
+            (item?.concept_name ?? "").toString().trim() ||
+            (item?.title ?? "").toString().trim() ||
+            (topicName || "").toString().trim();
+
+        // Prefer topic_name (workflow schema). If missing, fall back to subtopic (KG response).
+        const category = topicName || (item?.subtopic ?? "").toString().trim() || "N/A";
+
+        const diff = normalizeDifficulty(item?.difficulty);
+
+        const prerequisites =
+            coercePrerequisites(
+                item?.prerequisites ??
+                item?.prerequisite_concepts ??
+                item?.prereq ??
+                item?.prerequisite ??
+                item?.prerequisites_list
+            )
+            .map(p => (p ?? "").toString().trim())
+            .filter(Boolean);
+
+        return {
+            concept_name: conceptName,
+            category,
+            difficulty: diff,
+            raw_difficulty: item?.difficulty ?? null,
+            prerequisites
+        };
+    }
+
+    function detectConceptArray(data) {
+        if (!data || typeof data !== "object") return [];
+        // Full KG JSON path (as used by kb_parser.html)
+        if (data.concepts_json && Array.isArray(data.concepts_json.concepts)) {
+            return data.concepts_json.concepts;
+        }
+        // Concept extractor output path
+        if (Array.isArray(data.concepts)) {
+            return data.concepts;
+        }
+        // Some wrappers might use concepts_json directly as the list
+        if (Array.isArray(data.concepts_json)) {
+            return data.concepts_json;
+        }
+        return [];
+    }
+
+    function parseUniqueDetails() {
+        const input = document.getElementById('jsonInput').value;
+        const errorLog = document.getElementById('errorLog');
+        const table = document.getElementById('detailTable');
+        const tbody = document.getElementById('tableBody');
+        
+        errorLog.innerText = "";
+        tbody.innerHTML = "";
+        const groundTruthArea = document.getElementById('groundTruthArea');
+        const groundTruthPre = document.getElementById('groundTruthPre');
+        groundTruthArea.style.display = "none";
+        groundTruthPre.textContent = "";
+
+        try {
+            const data = JSON.parse(input);
+            const concepts = detectConceptArray(data);
+            if (!concepts.length) {
+                throw new Error("Could not find a concepts array. Expected either top-level `concepts` or nested `concepts_json.concepts`.");
+            }
+
+            // Track seen concept names to avoid dropping duplicates in the UI.
+            // Backend prerequisite edges are keyed by concept "name", which typically maps to workflow `subtopic`.
+            const seenConcepts = new Set();
+
+            concepts.forEach(item => {
+                const norm = normalizeConceptForGroundTruth(item);
+                if (!norm.concept_name || seenConcepts.has(norm.concept_name)) return;
+                seenConcepts.add(norm.concept_name);
+
+                const row = document.createElement('tr');
+
+                // Concept (normalized name)
+                const tdConcept = document.createElement('td');
+                tdConcept.innerHTML = `<strong>${escapeHtml(norm.concept_name || "N/A")}</strong>`;
+
+                // Category (normalized topic)
+                const tdCategory = document.createElement('td');
+                tdCategory.textContent = norm.category || "N/A";
+
+                // Difficulty badge
+                const tdDiff = document.createElement('td');
+                tdDiff.innerHTML = `<span class="badge ${norm.difficulty}">${norm.difficulty}</span>`;
+
+                // Prerequisites (array -> string)
+                const tdPre = document.createElement('td');
+                tdPre.textContent = norm.prerequisites.length > 0 ? norm.prerequisites.join(", ") : "None";
+
+                row.appendChild(tdConcept);
+                row.appendChild(tdCategory);
+                row.appendChild(tdDiff);
+                row.appendChild(tdPre);
+                tbody.appendChild(row);
+            });
+
+            table.style.display = "table";
+
+            // Auto-generate ground truth after parsing the UI table.
+            const gt = buildGroundTruth(data, concepts);
+            renderGroundTruth(gt);
+
+        } catch (e) {
+            errorLog.innerText = "Error parsing JSON: " + e.message;
+            table.style.display = "none";
+            const groundTruthArea = document.getElementById('groundTruthArea');
+            groundTruthArea.style.display = "none";
+        }
+    }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function buildGroundTruth(data, concepts) {
+        const strictInputTruth = document.getElementById("strictInputTruth")?.checked !== false;
+
+        // If relationships are already present (from the KG endpoint),
+        // this is the canonical prerequisite edge set. Use it directly.
+        if (!strictInputTruth && data && Array.isArray(data.relationships)) {
+            const rels = data.relationships || []
+            const prerequisiteEdges = []
+            rels.forEach(r => {
+                if (!r) return
+                if (r.relationship_type !== "prerequisite_of") return
+                const from = r.from_concept_name ?? r.from ?? ""
+                const to = r.to_concept_name ?? r.to ?? ""
+                const fromKey = String(from).toLowerCase().trim()
+                const toKey = String(to).toLowerCase().trim()
+                if (!from || !to) return
+                prerequisiteEdges.push({
+                    from,
+                    to,
+                    from_key: fromKey,
+                    to_key: toKey,
+                    relationship_type: "prerequisite_of"
+                })
+            })
+
+            const seen = new Set()
+            const distinctEdges = []
+            prerequisiteEdges.forEach(e => {
+                const key = `${e.from_key}=>${e.to_key}=>${e.relationship_type}`
+                if (seen.has(key)) return
+                seen.add(key)
+                distinctEdges.push(e)
+            })
+
+            return {
+                source: "relationships",
+                strict_input_truth: strictInputTruth,
+                input_shape: data && data.concepts_json ? "concepts_json_wrapper" : (data && data.concepts ? "top_level_concepts" : "unknown"),
+                concept_count: Array.isArray(data.concepts) ? data.concepts.length : null,
+                prerequisite_edge_count: distinctEdges.length,
+                diagnostics: {
+                    mode: "canonical_relationships",
+                    note: "Edges are taken directly from relationships[]"
+                },
+                prerequisite_edges: distinctEdges
+            }
+        }
+
+        const normalizedConcepts = (concepts || []).map(normalizeConceptForGroundTruth)
+            .filter(c => c.concept_name);
+
+        const edges = [];
+        normalizedConcepts.forEach(c => {
+            (c.prerequisites || []).forEach(pr => {
+                const fromKey = String(pr).toLowerCase().trim();
+                const toKey = String(c.concept_name).toLowerCase().trim();
+                edges.push({
+                    from: pr, // prerequisite concept name
+                    to: c.concept_name, // dependent concept name
+                    from_key: fromKey,
+                    to_key: toKey,
+                    relationship_type: "prerequisite_of"
+                });
+            });
+        });
+
+        // De-duplicate edges for stable output (matches typical verification behavior)
+        const seen = new Set();
+        const distinctEdges = [];
+        edges.forEach(e => {
+            // Use the canonical keys for dedupe (backend can link case-insensitively).
+            const key = `${e.from_key}=>${e.to_key}=>${e.relationship_type}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            distinctEdges.push(e);
+        });
+
+        const conceptsWithPrereqs = normalizedConcepts.filter(c => (c.prerequisites || []).length > 0).length;
+        const duplicateConceptNames = (() => {
+            const counts = {};
+            normalizedConcepts.forEach(c => {
+                counts[c.concept_name] = (counts[c.concept_name] || 0) + 1;
+            });
+            return Object.entries(counts).filter(([, n]) => n > 1).map(([name, n]) => ({ name, count: n }));
+        })();
+
+        const note =
+            distinctEdges.length === 0
+                ? "No prerequisite edges found in input. KG can only create prerequisite edges from concept prerequisites in this code path."
+                : "Edges derived from input concept prerequisites.";
+
+        return {
+            source: "concepts",
+            strict_input_truth: strictInputTruth,
+            input_shape: data && data.concepts_json ? "concepts_json_wrapper" : (data && data.concepts ? "top_level_concepts" : "unknown"),
+            concept_count: normalizedConcepts.length,
+            prerequisite_edge_count: distinctEdges.length,
+            diagnostics: {
+                mode: "input_concepts",
+                concepts_with_prerequisites: conceptsWithPrereqs,
+                concepts_without_prerequisites: normalizedConcepts.length - conceptsWithPrereqs,
+                duplicate_concept_names: duplicateConceptNames,
+                note
+            },
+            concepts: normalizedConcepts,
+            prerequisite_edges: distinctEdges
+        };
+    }
+
+    function renderGroundTruth(gt) {
+        const groundTruthArea = document.getElementById('groundTruthArea');
+        const groundTruthPre = document.getElementById('groundTruthPre');
+        const gtMeta = document.getElementById('gtMeta');
+
+        groundTruthPre.textContent = JSON.stringify(gt, null, 2);
+        gtMeta.textContent = `Concepts: ${gt.concept_count} | Prerequisite edges: ${gt.prerequisite_edge_count}`;
+        groundTruthArea.style.display = "block";
+    }
+
+    function exportGroundTruth() {
+        // Re-parse and export in one step.
+        const input = document.getElementById('jsonInput').value;
+        const errorLog = document.getElementById('errorLog');
+        errorLog.innerText = "";
+
+        try {
+            const data = JSON.parse(input);
+            const concepts = detectConceptArray(data);
+            if (!concepts.length) {
+                throw new Error("Could not find a concepts array. Expected either top-level `concepts` or nested `concepts_json.concepts`.");
+            }
+            const gt = buildGroundTruth(data, concepts);
+            renderGroundTruth(gt);
+        } catch (e) {
+            errorLog.innerText = "Error exporting ground truth: " + e.message;
+        }
+    }
+
+    async function copyGroundTruth() {
+        const pre = document.getElementById('groundTruthPre');
+        const text = pre?.textContent || "";
+        if (!text) return;
+
+        try {
+            await navigator.clipboard.writeText(text);
+            const errorLog = document.getElementById('errorLog');
+            errorLog.innerText = "";
+            errorLog.style.color = "#2ecc71";
+            errorLog.innerText = "Ground Truth JSON copied to clipboard!";
+            setTimeout(() => {
+                errorLog.innerText = "";
+                errorLog.style.color = "";
+            }, 2000);
+        } catch (e) {
+            console.error("Copy failed:", e);
+            // Fallback
+            try {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                textarea.style.top = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                if (!ok) throw new Error("execCommand copy failed");
+            } catch (e2) {
+                const errorLog = document.getElementById('errorLog');
+                errorLog.innerText = "Copy failed. Please copy manually from the output box.";
+            }
+        }
+    }
+
+    function edgeKey(from, to, type = "prerequisite_of") {
+        return `${String(from).toLowerCase().trim()}=>${String(to).toLowerCase().trim()}=>${type}`;
+    }
+
+    function buildEdgeMap(edges) {
+        const map = new Map();
+        (edges || []).forEach(e => {
+            if (!e) return;
+            const from = e.from ?? e.from_concept_name ?? "";
+            const to = e.to ?? e.to_concept_name ?? "";
+            const relType = e.relationship_type || "prerequisite_of";
+            if (!from || !to) return;
+            const key = edgeKey(from, to, relType);
+            if (!map.has(key)) {
+                map.set(key, {
+                    from,
+                    to,
+                    relationship_type: relType,
+                    key
+                });
+            }
+        });
+        return map;
+    }
+
+    function extractOutputPrerequisiteEdges(kgData, truthConceptKeys = new Set(), options = {}) {
+        const opts = {
+            ignoreSelfLoops: options.ignoreSelfLoops !== false,
+            restrictToTruthConcepts: options.restrictToTruthConcepts !== false
+        };
+        const stats = {
+            total_relationship_rows: 0,
+            prerequisite_rows: 0,
+            dropped_self_loops: 0,
+            dropped_outside_truth: 0,
+            kept_edges: 0
+        };
+        if (!kgData || !Array.isArray(kgData.relationships)) return { edges: [], stats };
+
+        const edges = [];
+        stats.total_relationship_rows = kgData.relationships.length;
+
+        kgData.relationships.forEach(r => {
+            if (!r || r.relationship_type !== "prerequisite_of") return;
+            stats.prerequisite_rows += 1;
+
+            const from = (r.from_concept_name ?? r.from ?? "").toString().trim();
+            const to = (r.to_concept_name ?? r.to ?? "").toString().trim();
+            if (!from || !to) return;
+
+            const fromKey = from.toLowerCase();
+            const toKey = to.toLowerCase();
+
+            if (opts.ignoreSelfLoops && fromKey === toKey) {
+                stats.dropped_self_loops += 1;
+                return;
+            }
+
+            if (opts.restrictToTruthConcepts && truthConceptKeys.size > 0) {
+                if (!truthConceptKeys.has(fromKey) || !truthConceptKeys.has(toKey)) {
+                    stats.dropped_outside_truth += 1;
+                    return;
+                }
+            }
+
+            edges.push({
+                from,
+                to,
+                relationship_type: "prerequisite_of"
+            });
+        });
+
+        stats.kept_edges = edges.length;
+        return { edges, stats };
+    }
+
+    function runComparison() {
+        const errorLog = document.getElementById('errorLog');
+        const diffPre = document.getElementById('diffPre');
+        const diffMeta = document.getElementById('diffMeta');
+        errorLog.innerText = "";
+        diffPre.style.display = "none";
+        diffPre.textContent = "";
+        diffMeta.textContent = "";
+
+        try {
+            const inputRaw = document.getElementById('jsonInput').value;
+            const outputRaw = document.getElementById('kgOutputInput').value;
+
+            if (!inputRaw.trim()) {
+                throw new Error("Input concepts JSON is required before comparison.");
+            }
+            if (!outputRaw.trim()) {
+                throw new Error("KG output JSON is required for comparison.");
+            }
+
+            const inputData = JSON.parse(inputRaw);
+            const concepts = detectConceptArray(inputData);
+            if (!concepts.length) {
+                throw new Error("Could not find concepts array in input JSON.");
+            }
+
+            // Force strict truth from concepts only for accuracy testing
+            const strictCheckbox = document.getElementById("strictInputTruth");
+            const prevStrict = strictCheckbox.checked;
+            strictCheckbox.checked = true;
+            const truth = buildGroundTruth(inputData, concepts);
+            strictCheckbox.checked = prevStrict;
+
+            const truthConceptKeys = new Set(
+                (truth.concepts || [])
+                    .map(c => (c?.concept_name ?? "").toString().trim().toLowerCase())
+                    .filter(Boolean)
+            );
+
+            const kgData = JSON.parse(outputRaw);
+            const { edges: outputEdges, stats: outputStats } = extractOutputPrerequisiteEdges(
+                kgData,
+                truthConceptKeys,
+                {
+                    ignoreSelfLoops: document.getElementById("ignoreSelfLoops")?.checked !== false,
+                    restrictToTruthConcepts: document.getElementById("restrictToTruthConcepts")?.checked !== false
+                }
+            );
+
+            const truthMap = buildEdgeMap(truth.prerequisite_edges || []);
+            const outputMap = buildEdgeMap(outputEdges);
+
+            const matched = [];
+            const missingInOutput = [];
+            const extraInOutput = [];
+
+            truthMap.forEach((edge, key) => {
+                if (outputMap.has(key)) matched.push(edge);
+                else missingInOutput.push(edge);
+            });
+            outputMap.forEach((edge, key) => {
+                if (!truthMap.has(key)) extraInOutput.push(edge);
+            });
+
+            const precision = outputMap.size === 0 ? 1 : matched.length / outputMap.size;
+            const recall = truthMap.size === 0 ? 1 : matched.length / truthMap.size;
+            const f1 = (precision + recall) === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+
+            const report = {
+                summary: {
+                    truth_edges: truthMap.size,
+                    output_edges: outputMap.size,
+                    matched: matched.length,
+                    missing_in_output: missingInOutput.length,
+                    extra_in_output: extraInOutput.length,
+                    precision: Number(precision.toFixed(4)),
+                    recall: Number(recall.toFixed(4)),
+                    f1: Number(f1.toFixed(4))
+                },
+                comparison_filters: {
+                    ignore_self_loops: document.getElementById("ignoreSelfLoops")?.checked !== false,
+                    restrict_to_truth_concepts: document.getElementById("restrictToTruthConcepts")?.checked !== false
+                },
+                output_edge_extraction_stats: outputStats,
+                matched,
+                missing_in_output: missingInOutput,
+                extra_in_output: extraInOutput
+            };
+
+            diffMeta.textContent =
+                `Truth: ${truthMap.size} | Output: ${outputMap.size} | Matched: ${matched.length} | Missing: ${missingInOutput.length} | Extra: ${extraInOutput.length}`;
+            diffPre.textContent = JSON.stringify(report, null, 2);
+            diffPre.style.display = "block";
+        } catch (e) {
+            errorLog.innerText = `Comparison error: ${e.message}`;
+        }
+    }
+
+    async function copyDiffReport() {
+        const diffPre = document.getElementById('diffPre');
+        const text = diffPre?.textContent || "";
+        if (!text.trim()) return;
+        try {
+            await navigator.clipboard.writeText(text);
+            const errorLog = document.getElementById('errorLog');
+            errorLog.innerText = "";
+            errorLog.style.color = "#2ecc71";
+            errorLog.innerText = "Diff report copied to clipboard!";
+            setTimeout(() => {
+                errorLog.innerText = "";
+                errorLog.style.color = "";
+            }, 2000);
+        } catch (e) {
+            const errorLog = document.getElementById('errorLog');
+            errorLog.innerText = "Copy failed. Please copy manually from the diff box.";
+        }
+    }
+</script>
+
+</body>
+</html>

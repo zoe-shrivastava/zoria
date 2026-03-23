@@ -239,6 +239,13 @@ Map the content to the provided `subject_topics.json`.
 - Assign `subject_name` and `topic_name` exactly as they appear in the reference.
 - **Difficulty:** Categorize based on the complexity described in the taxonomy (easy/medium/hard).
 
+## 4.1 Prerequisites Extraction Rules (Strict)
+- `prerequisites` MUST be an array of concept names that are also present in the same extracted concepts output.
+- Never include the concept itself in its own prerequisites.
+- Do not invent external concepts that do not appear in the extracted concept list.
+- If a prerequisite is not clearly inferable from the source markdown, use an empty array (`[]`).
+- Keep prerequisite names text-exact and consistent with extracted concept names so downstream matching succeeds.
+
 ## 5. Reference Taxonomy (subject_topics.json)
 {subject_topics_json}
 

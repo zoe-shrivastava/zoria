@@ -1,5 +1,7 @@
 # Zoria — Detailed Flows: Document Ingestion, Test Generation & Evaluation, Reports
 
+For a **compact view** with **Mermaid diagrams** (including Study Guide + AI Coach), see **[FLOWS.md](./FLOWS.md)**.
+
 This document describes how three core pipelines work end-to-end: **document ingestion**, **test generation and evaluation**, and **evaluation reports**.
 
 ---

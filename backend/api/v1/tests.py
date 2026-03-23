@@ -415,6 +415,7 @@ async def generate_test(
                 difficulty=request.difficulty,
                 num_questions=request.num_questions,
                 time_limit_minutes=request.time_limit_minutes,
+                question_types=request.question_types,
             )
             test_id = uuid_to_str(pending_test.get("id"))
             
@@ -430,6 +431,7 @@ async def generate_test(
                 num_questions=request.num_questions,
                 time_limit_minutes=request.time_limit_minutes,
                 language=request.language,
+                question_types=request.question_types,
             )
             test = pending_test
         else:

@@ -8,7 +8,7 @@ import os
 import logging
 import re
 from collections import Counter
-from typing import Optional
+from typing import Optional, Any, Dict, List, Tuple
 from pydantic import BaseModel
 
 from agents import FileSearchTool, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
@@ -46,6 +46,113 @@ def _estimate_question_count_from_markdown(markdown: str) -> int:
     lettered_parts = len(re.findall(r"^[a-z]\\.", markdown, flags=re.MULTILINE))
 
     return q_main + q_parts + concept_qs + lettered_parts
+
+
+def _normalize_difficulty_for_concepts_json(raw: Any) -> str:
+    """Normalize difficulty to one of easy/medium/hard."""
+    text = (raw or "").__str__().strip().lower()
+    if "|" in text:
+        for part in [p.strip() for p in text.split("|")]:
+            if part in {"easy", "medium", "hard"}:
+                return part
+        return "medium"
+    if text in {"easy", "medium", "hard"}:
+        return text
+    return "medium"
+
+
+def _canonical_key(subject_name: str, topic_name: str, subtopic: str) -> str:
+    return f"{(subject_name or '').strip().lower()}::{(topic_name or '').strip().lower()}::{(subtopic or '').strip().lower()}"
+
+
+def _postprocess_concepts_output(output_parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Deduplicate concepts and sanitize prerequisites for KG-ready concepts JSON."""
+    concepts = output_parsed.get("concepts", []) if isinstance(output_parsed, dict) else []
+    if not isinstance(concepts, list):
+        return {"concepts": []}, {
+            "concept_count": 0,
+            "duplicate_concept_ratio": 0.0,
+            "question_count_total": 0,
+            "prereq_coverage": 0.0,
+            "invalid_prereq_refs": 0,
+        }
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    seen_count = 0
+    for c in concepts:
+        if not isinstance(c, dict):
+            continue
+        subject_name = str(c.get("subject_name") or "").strip()
+        topic_name = str(c.get("topic_name") or "").strip()
+        subtopic = str(c.get("subtopic") or "").strip()
+        if not subtopic:
+            continue
+        key = _canonical_key(subject_name, topic_name, subtopic)
+        seen_count += 1
+
+        if key not in grouped:
+            grouped[key] = {
+                "subject_name": subject_name,
+                "topic_name": topic_name,
+                "subtopic": subtopic,
+                "difficulty": _normalize_difficulty_for_concepts_json(c.get("difficulty")),
+                "prerequisites": list(c.get("prerequisites") or []),
+                "questions": list(c.get("questions") or []),
+                "associated_visuals": list(c.get("associated_visuals") or []),
+                "keywords": list(c.get("keywords") or []),
+            }
+        else:
+            existing = grouped[key]
+            # Keep hardest difficulty among duplicates.
+            rank = {"easy": 1, "medium": 2, "hard": 3}
+            new_diff = _normalize_difficulty_for_concepts_json(c.get("difficulty"))
+            if rank.get(new_diff, 2) > rank.get(existing.get("difficulty", "medium"), 2):
+                existing["difficulty"] = new_diff
+            existing["questions"].extend(list(c.get("questions") or []))
+            existing["associated_visuals"].extend(list(c.get("associated_visuals") or []))
+            existing["keywords"].extend(list(c.get("keywords") or []))
+            existing["prerequisites"].extend(list(c.get("prerequisites") or []))
+
+    deduped = list(grouped.values())
+    concept_name_set = {str(c.get("subtopic") or "").strip().lower() for c in deduped if c.get("subtopic")}
+
+    invalid_prereq_refs = 0
+    for c in deduped:
+        # Deduplicate lists while preserving order.
+        c["associated_visuals"] = list(dict.fromkeys([v for v in c.get("associated_visuals", []) if v]))
+        c["keywords"] = list(dict.fromkeys([k for k in c.get("keywords", []) if k]))
+
+        # Sanitize prerequisites: keep only refs that map to existing subtopics, remove self refs.
+        cleaned_prereqs: List[str] = []
+        subtopic_lower = str(c.get("subtopic") or "").strip().lower()
+        for p in c.get("prerequisites", []) or []:
+            p_text = str(p or "").strip()
+            if not p_text:
+                continue
+            p_lower = p_text.lower()
+            if p_lower == subtopic_lower:
+                continue
+            if p_lower not in concept_name_set:
+                invalid_prereq_refs += 1
+                continue
+            if p_text not in cleaned_prereqs:
+                cleaned_prereqs.append(p_text)
+        c["prerequisites"] = cleaned_prereqs
+
+    question_count_total = sum(len(c.get("questions", [])) for c in deduped)
+    concepts_with_prereqs = sum(1 for c in deduped if c.get("prerequisites"))
+    concept_count = len(deduped)
+    prereq_coverage = (concepts_with_prereqs / concept_count) if concept_count else 0.0
+    duplicate_concept_ratio = ((seen_count - concept_count) / seen_count) if seen_count else 0.0
+
+    metrics = {
+        "concept_count": concept_count,
+        "duplicate_concept_ratio": round(duplicate_concept_ratio, 4),
+        "question_count_total": question_count_total,
+        "prereq_coverage": round(prereq_coverage, 4),
+        "invalid_prereq_refs": invalid_prereq_refs,
+    }
+    return {"concepts": deduped}, metrics
 
 # Tool definitions
 file_search = FileSearchTool(
@@ -99,7 +206,7 @@ def get_concept_extractor_agent(subject: Optional[str] = None):
     return Agent(
         name="Concept Extrator",
         instructions=get_prompt("concept_extractor", subject=subject),
-        model="gpt-5-nano",
+        model="gpt-5-mini",
         tools=[],
         output_type=ConceptExtratorSchema,
         model_settings=ModelSettings(
@@ -413,6 +520,68 @@ async def run_workflow(workflow_input: WorkflowInput) -> dict:
                 logger.error("Max attempts reached; proceeding with zero concepts result.")
             # Loop continues to retry once when attempt == 1
         
+        # Post-process concepts JSON for KG readiness (dedupe + sanitize prerequisites).
+        postprocessed_concepts, quality_metrics = _postprocess_concepts_output(
+            concept_extrator_result["output_parsed"]
+        )
+        concept_extrator_result["output_parsed"] = postprocessed_concepts
+        logger.info(
+            "Concept extraction quality: concept_count=%s question_count_total=%s duplicate_concept_ratio=%s prereq_coverage=%s invalid_prereq_refs=%s",
+            quality_metrics["concept_count"],
+            quality_metrics["question_count_total"],
+            quality_metrics["duplicate_concept_ratio"],
+            quality_metrics["prereq_coverage"],
+            quality_metrics["invalid_prereq_refs"],
+        )
+
+        # One optional retry if prerequisites are missing on concept-rich docs.
+        concepts_list = concept_extrator_result["output_parsed"].get("concepts", [])
+        if len(concepts_list) >= 5 and quality_metrics["prereq_coverage"] < 0.1:
+            logger.warning(
+                "Low prerequisite coverage (%.3f) with %d concepts. Running one focused retry for prerequisite links.",
+                quality_metrics["prereq_coverage"],
+                len(concepts_list),
+            )
+            retry_history = [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Re-extract concepts from this markdown and focus on prerequisite links. "
+                            "Return the same schema, ensure prerequisites reference only concept names present in your output, "
+                            "and avoid self-prerequisites.\n\n" + markdown_text
+                        )
+                    }
+                ]
+            }]
+            retry_temp = await run_agent_with_logging(
+                concept_extractor_agent,
+                input_data=retry_history,
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef"
+                }),
+                context_source="document_processing",
+                document_id=workflow.get("document_id") if isinstance(workflow, dict) else None,
+                metadata={"workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef", "agent": "concept_extractor_retry"}
+            )
+            retry_parsed = retry_temp.final_output.model_dump()
+            retry_postprocessed, retry_metrics = _postprocess_concepts_output(retry_parsed)
+            if (
+                retry_metrics["prereq_coverage"] > quality_metrics["prereq_coverage"]
+                or retry_metrics["question_count_total"] >= quality_metrics["question_count_total"]
+            ):
+                logger.info(
+                    "Accepted retry concepts output: prereq_coverage %.3f -> %.3f, question_count_total %s -> %s",
+                    quality_metrics["prereq_coverage"],
+                    retry_metrics["prereq_coverage"],
+                    quality_metrics["question_count_total"],
+                    retry_metrics["question_count_total"],
+                )
+                concept_extrator_result["output_parsed"] = retry_postprocessed
+                quality_metrics = retry_metrics
+
         # Extract subject_name from concepts output (no need for separate LLM call)
         extracted_subject = None
         concepts_list = concept_extrator_result["output_parsed"].get("concepts", [])
@@ -524,10 +693,46 @@ async def extract_concepts_from_markdown(
         metadata={"workflow_id": "wf_69801d60f7b081908e575da4a2b2c44c0a6a346a012420ef", "agent": "concept_extractor"}
     )
     
+    # Parse agent output defensively. Reprocess failures have been observed when
+    # final_output is not directly JSON/model-dump compatible.
+    try:
+        output_text = concept_extrator_result_temp.final_output.json()
+    except Exception:
+        output_text = concept_extrator_result_temp.final_output_as(str)
+
+    try:
+        output_parsed = concept_extrator_result_temp.final_output.model_dump()
+    except Exception:
+        # Fallback path when SDK returns a string-like output.
+        try:
+            output_parsed = json.loads(output_text) if isinstance(output_text, str) else {}
+        except Exception as e:
+            logger.error(
+                "extract_concepts_from_markdown: failed to parse concept extractor output. "
+                "document_id=%s output_type=%s preview=%s",
+                document_id,
+                type(concept_extrator_result_temp.final_output),
+                str(output_text)[:1000],
+                exc_info=True,
+            )
+            raise ValueError(f"Concept extractor output parsing failed: {e}")
+
     concept_extrator_result = {
-        "output_text": concept_extrator_result_temp.final_output.json(),
-        "output_parsed": concept_extrator_result_temp.final_output.model_dump()
+        "output_text": output_text,
+        "output_parsed": output_parsed
     }
+    postprocessed_concepts, quality_metrics = _postprocess_concepts_output(
+        concept_extrator_result["output_parsed"]
+    )
+    concept_extrator_result["output_parsed"] = postprocessed_concepts
+    logger.info(
+        "extract_concepts_from_markdown quality: concept_count=%s question_count_total=%s duplicate_concept_ratio=%s prereq_coverage=%s invalid_prereq_refs=%s",
+        quality_metrics["concept_count"],
+        quality_metrics["question_count_total"],
+        quality_metrics["duplicate_concept_ratio"],
+        quality_metrics["prereq_coverage"],
+        quality_metrics["invalid_prereq_refs"],
+    )
     
     # Extract subject_name from concepts output
     extracted_subject = None

@@ -36,8 +36,8 @@ class QuestionValidatorService:
     if not blueprint.question_text or not blueprint.question_text.strip():
       raise ValueError("Question text cannot be empty")
 
-    # Support multiple question types
-    valid_types = {"multiple_choice", "short_answer", "problem_solving"}
+    # Support all canonical question types (must match schemas/test.VALID_QUESTION_TYPES and test_generation_service._get_section_title)
+    valid_types = {"multiple_choice", "short_answer", "problem_solving", "conceptual_question", "matching", "fill_in_the_blank"}
     if blueprint.question_type not in valid_types:
       raise ValueError(f"Unsupported question_type: {blueprint.question_type}. Must be one of: {valid_types}")
 

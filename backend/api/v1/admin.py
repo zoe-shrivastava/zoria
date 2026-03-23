@@ -1,6 +1,7 @@
 """Admin API endpoints."""
 
 import json
+import logging
 from datetime import datetime
 from typing import List, Optional
 
@@ -13,6 +14,10 @@ from schemas.admin_settings import TimestampSettings
 from services.user_service import UserService
 from services.document_service import DocumentService
 from services.llm_logging_service import LLMLoggingService
+from services.concept_evaluation_service import (
+    evaluate_markdown_concepts,
+    summarize_concepts_for_kg_expected,
+)
 from core.dependencies import get_current_admin
 from core.database import get_db, Database
 from database.repositories.test_repository import TestRepository
@@ -197,6 +202,7 @@ async def reprocess_document(
     
     POST /api/v1/admin/documents/{document_id}/reprocess
     """
+    logger = logging.getLogger(__name__)
     try:
         document_service = DocumentService()
         await document_service.reprocess_document(
@@ -225,6 +231,7 @@ async def reprocess_document(
             detail=str(e)
         )
     except Exception as e:
+        logger.error(f"Error reprocessing document {document_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reprocess document: {str(e)}"
@@ -485,7 +492,7 @@ async def rebuild_document_knowledge_graph(
 
         # Set status to processing and enqueue background KG rebuild with cleanup
         await document_service.document_repo.update_status(document_id, "processing")
-        await enqueue_document_processing(document_id, cleanup_first=True)
+        await enqueue_document_processing(document_id, cleanup_first=True, run_type="rebuild")
 
         return {
             "document_id": document_id,
@@ -500,6 +507,490 @@ async def rebuild_document_knowledge_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to rebuild knowledge graph: {str(e)}",
         )
+
+
+async def _get_document_markdown_concepts_for_eval(document_id: str) -> dict:
+    document_service = DocumentService()
+    document = await document_service.get_document(
+        document_id=document_id,
+        user_id=None,
+        user_role="admin",
+    )
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    markdown = document.get("markdown_content") or ""
+    concepts = document.get("concepts")
+    if not markdown:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document markdown is missing. Reprocess Phase 1 first.",
+        )
+    if not concepts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document concepts JSON is missing. Reprocess Phase 1 first.",
+        )
+    if isinstance(concepts, str):
+        concepts = json.loads(concepts)
+    if not isinstance(concepts, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document concepts JSON is invalid.",
+        )
+    return {"document": document, "markdown": markdown, "concepts": concepts}
+
+
+async def _build_concepts_to_kg_actual(document_id: str, document: dict, ingestion_only: bool = True) -> dict:
+    kg_actual = {
+        "available": False,
+        "reason": "Document is not ready. Knowledge graph summary becomes available after Phase 2 completes.",
+        "all_nodes": 0,
+        "all_edges": 0,
+        "difficulty_distribution": {},
+        "prerequisites": {
+            "total_prerequisite_edges": 0,
+            "concepts_with_prerequisites": 0,
+        },
+    }
+    if document.get("status") != "ready":
+        return kg_actual
+
+    import uuid as uuid_module
+
+    db = get_db()
+    if db.pool is None:
+        await db.connect()
+
+    # ingestion_only=True means evaluate only KG entities associated to this
+    # document's ingestion output:
+    # - concepts created for this document (concepts.document_id)
+    # - deduplicated concepts linked to this document (document_concepts)
+    #
+    # Relying only on concepts.document_id can produce false "0 actual nodes"
+    # for docs where ingestion reused existing concepts.
+    if ingestion_only:
+        db_concepts = await db.fetch(
+            """
+            SELECT DISTINCT c.*
+            FROM concepts c
+            LEFT JOIN document_concepts dc ON dc.concept_id = c.id
+            WHERE c.document_id = $1::uuid
+               OR dc.document_id = $1::uuid
+            ORDER BY c.created_at
+            """,
+            document_id,
+        )
+    else:
+        from database.repositories.concept_repository import ConceptRepository
+        concept_repo = ConceptRepository(db)
+        db_concepts = await concept_repo.get_concepts_by_document(document_id)
+    concept_ids = [str(c["id"]) for c in db_concepts] if db_concepts else []
+    relationships = []
+    if concept_ids:
+        concept_uuids = [uuid_module.UUID(cid) for cid in concept_ids]
+        relationships = await db.fetch(
+            """
+            SELECT
+                cr.id,
+                cr.from_concept_id,
+                cr.to_concept_id,
+                cr.relationship_type,
+                c_from.name AS from_concept_name,
+                c_to.name AS to_concept_name
+            FROM concept_relationships cr
+            LEFT JOIN concepts c_from ON c_from.id = cr.from_concept_id
+            LEFT JOIN concepts c_to ON c_to.id = cr.to_concept_id
+            WHERE cr.from_concept_id = ANY($1::uuid[])
+              AND cr.to_concept_id = ANY($1::uuid[])
+            """,
+            concept_uuids
+        )
+
+    difficulty_distribution = {}
+    for c in db_concepts:
+        difficulty = str(c.get("difficulty") or "unknown").strip().lower() or "unknown"
+        difficulty_distribution[difficulty] = difficulty_distribution.get(difficulty, 0) + 1
+
+    prereq_edges = [
+        r for r in relationships
+        if str(r.get("relationship_type") or "").strip().lower() == "prerequisite_of"
+    ]
+    concepts_with_prereqs = {str(r["to_concept_id"]) for r in prereq_edges if r.get("to_concept_id")}
+    nodes = [
+        {
+            "concept_id": str(c["id"]),
+            "concept_name": str(c.get("name") or "").strip(),
+            "subtopic": c.get("subtopic"),
+            "difficulty": str(c.get("difficulty") or "unknown").strip().lower() or "unknown",
+        }
+        for c in db_concepts
+    ]
+    edges = [
+        {
+            "from_concept_id": str(r["from_concept_id"]) if r.get("from_concept_id") else None,
+            "to_concept_id": str(r["to_concept_id"]) if r.get("to_concept_id") else None,
+            "from_concept_name": str(r.get("from_concept_name") or "").strip(),
+            "to_concept_name": str(r.get("to_concept_name") or "").strip(),
+            "relationship_type": str(r.get("relationship_type") or "").strip().lower(),
+        }
+        for r in prereq_edges
+    ]
+    return {
+        "available": True,
+        "reason": None,
+        "all_nodes": len(db_concepts),
+        "all_edges": len(relationships),
+        "difficulty_distribution": difficulty_distribution,
+        "prerequisites": {
+            "total_prerequisite_edges": len(prereq_edges),
+            "concepts_with_prerequisites": len(concepts_with_prereqs),
+        },
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+async def _load_kg_snapshot_actual(document_id: str, snapshot_id: Optional[str] = None) -> dict:
+    """Load frozen KG payload from snapshots table."""
+    db = get_db()
+    if db.pool is None:
+        await db.connect()
+
+    if snapshot_id:
+        row = await db.fetchrow(
+            """
+            SELECT id, document_id, run_type, snapshot_source, concepts_json_hash, kg_payload, created_at
+            FROM kg_run_snapshots
+            WHERE id = $1::uuid AND document_id = $2::uuid
+            """,
+            snapshot_id,
+            document_id,
+        )
+    else:
+        row = await db.fetchrow(
+            """
+            SELECT id, document_id, run_type, snapshot_source, concepts_json_hash, kg_payload, created_at
+            FROM kg_run_snapshots
+            WHERE document_id = $1::uuid
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            document_id,
+        )
+
+    if not row:
+        return {
+            "available": False,
+            "reason": "No KG snapshot found for this document.",
+            "all_nodes": 0,
+            "all_edges": 0,
+            "difficulty_distribution": {},
+            "prerequisites": {
+                "total_prerequisite_edges": 0,
+                "concepts_with_prerequisites": 0,
+            },
+            "nodes": [],
+            "edges": [],
+        }
+
+    payload = row.get("kg_payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload) if payload.strip() else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["snapshot"] = {
+        "id": str(row["id"]),
+        "document_id": str(row["document_id"]),
+        "run_type": row.get("run_type"),
+        "snapshot_source": row.get("snapshot_source"),
+        "concepts_json_hash": row.get("concepts_json_hash"),
+        "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+    }
+    payload.setdefault("available", True)
+    payload.setdefault("reason", None)
+    payload.setdefault("all_nodes", len(payload.get("nodes", [])))
+    payload.setdefault("all_edges", len(payload.get("edges", [])))
+    payload.setdefault("difficulty_distribution", {})
+    payload.setdefault("prerequisites", {
+        "total_prerequisite_edges": 0,
+        "concepts_with_prerequisites": 0,
+    })
+    payload.setdefault("nodes", [])
+    payload.setdefault("edges", [])
+    return payload
+
+
+@router.get("/documents/{document_id}/evaluate-md-concepts")
+async def evaluate_md_to_concepts(
+    document_id: str,
+    admin: dict = Depends(get_current_admin),
+):
+    """Evaluate MD -> Concepts report (admin only)."""
+    try:
+        eval_input = await _get_document_markdown_concepts_for_eval(document_id)
+        document = eval_input["document"]
+        markdown = eval_input["markdown"]
+        concepts = eval_input["concepts"]
+        m2c_report = evaluate_markdown_concepts(markdown, concepts)
+        return {
+            "document_id": document_id,
+            "filename": document.get("filename"),
+            "report": m2c_report,
+        }
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to parse stored concepts JSON.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to evaluate MD -> Concepts: {str(e)}",
+        )
+
+
+@router.get("/documents/{document_id}/evaluate-concepts-kg")
+async def evaluate_concepts_to_kg(
+    document_id: str,
+    ingestion_only: bool = Query(
+        True,
+        description="If true, evaluate Concepts -> KG against ingestion-scoped KG only.",
+    ),
+    snapshot_id: Optional[str] = Query(
+        None,
+        description="Optional KG snapshot ID. If provided, evaluates against frozen snapshot payload.",
+    ),
+    admin: dict = Depends(get_current_admin),
+):
+    """Evaluate Concepts -> KG report (admin only)."""
+    try:
+        eval_input = await _get_document_markdown_concepts_for_eval(document_id)
+        document = eval_input["document"]
+        concepts = eval_input["concepts"]
+        kg_expected = summarize_concepts_for_kg_expected(concepts)
+        if snapshot_id:
+            kg_actual = await _load_kg_snapshot_actual(document_id, snapshot_id=snapshot_id)
+        else:
+            kg_actual = await _build_concepts_to_kg_actual(document_id, document, ingestion_only=ingestion_only)
+        expected_node_map = {
+            str(n.get("concept_key") or "").lower(): n
+            for n in (kg_expected.get("nodes") or [])
+            if n.get("concept_key")
+        }
+        actual_node_map = {
+            f"{str(n.get('subtopic') or '').strip().lower()}::{str(n.get('concept_name') or '').strip().lower()}": n
+            for n in (kg_actual.get("nodes") or [])
+            if n.get("concept_name")
+        }
+
+        expected_edge_map = {
+            f"{str(e.get('from_key') or '').lower()}=>{str(e.get('to_key') or '').lower()}": e
+            for e in (kg_expected.get("edges") or [])
+            if e.get("from_key") and e.get("to_key")
+        }
+        actual_edge_map = {
+            f"{str(e.get('from_concept_name') or '').strip().lower()}=>{str(e.get('to_concept_name') or '').strip().lower()}": e
+            for e in (kg_actual.get("edges") or [])
+            if e.get("from_concept_name") and e.get("to_concept_name")
+        }
+
+        node_rows = []
+        for key, exp in expected_node_map.items():
+            act = actual_node_map.get(key)
+            node_rows.append({
+                "type": "node",
+                "concept_name": exp.get("concept_name"),
+                "node_created": bool(act),
+                "subtopic_correct": bool(act),
+                "difficulty_expected": exp.get("difficulty"),
+                "difficulty_actual": act.get("difficulty") if act else None,
+                "difficulty_correct": bool(act) and (str(exp.get("difficulty") or "").strip().lower() == str(act.get("difficulty") or "").strip().lower()),
+                "prerequisites_expected": exp.get("prerequisites", []),
+                "correct": bool(act),
+            })
+
+        edge_rows = []
+        for key, exp in expected_edge_map.items():
+            act = actual_edge_map.get(key)
+            edge_rows.append({
+                "type": "edge",
+                "prerequisite": (exp.get("from_key") or "").split("::", 1)[-1],
+                "target_concept": (exp.get("to_key") or "").split("::", 1)[-1],
+                "edge_created": bool(act),
+                "correct": bool(act),
+            })
+
+        return {
+            "document_id": document_id,
+            "filename": document.get("filename"),
+            "report": {
+                "attributes": {
+                    "all_nodes": {"expected": kg_expected["all_nodes"], "actual": kg_actual["all_nodes"]},
+                    "all_edges": {"expected": kg_expected["all_edges"], "actual": kg_actual["all_edges"]},
+                    "difficulty": {
+                        "expected": kg_expected["difficulty_distribution"],
+                        "actual": kg_actual["difficulty_distribution"],
+                    },
+                    "prerequisites": {
+                        "expected": kg_expected["prerequisites"],
+                        "actual": kg_actual["prerequisites"],
+                    },
+                },
+                "availability": {
+                    "available": kg_actual["available"],
+                    "reason": kg_actual["reason"],
+                    "ingestion_only": ingestion_only,
+                    "snapshot_id": snapshot_id,
+                },
+                "entities": {
+                    "expected_nodes": kg_expected.get("nodes", []),
+                    "actual_nodes": kg_actual.get("nodes", []),
+                    "expected_edges": kg_expected.get("edges", []),
+                    "actual_edges": kg_actual.get("edges", []),
+                },
+                "rows": {
+                    "node_rows": node_rows,
+                    "edge_rows": edge_rows,
+                },
+                "snapshot": kg_actual.get("snapshot"),
+            },
+        }
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to parse stored concepts JSON.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to evaluate Concepts -> KG: {str(e)}",
+        )
+
+
+@router.get("/documents/{document_id}/kg-snapshots")
+async def list_document_kg_snapshots(
+    document_id: str,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: dict = Depends(get_current_admin),
+):
+    """List immutable KG snapshots for a document (admin only)."""
+    document_service = DocumentService()
+    document = await document_service.get_document(
+        document_id=document_id,
+        user_id=None,
+        user_role="admin",
+    )
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    db = get_db()
+    if db.pool is None:
+        await db.connect()
+
+    rows = await db.fetch(
+        """
+        SELECT id, document_id, run_type, snapshot_source, concepts_json_hash, metadata, created_at
+        FROM kg_run_snapshots
+        WHERE document_id = $1::uuid
+        ORDER BY created_at DESC
+        LIMIT $2 OFFSET $3
+        """,
+        document_id,
+        limit,
+        offset,
+    )
+
+    total = await db.fetchval(
+        "SELECT COUNT(*) FROM kg_run_snapshots WHERE document_id = $1::uuid",
+        document_id,
+    )
+
+    return {
+        "document_id": document_id,
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+        "snapshots": [
+            {
+                "id": str(r["id"]),
+                "document_id": str(r["document_id"]),
+                "run_type": r.get("run_type"),
+                "snapshot_source": r.get("snapshot_source"),
+                "concepts_json_hash": r.get("concepts_json_hash"),
+                "metadata": r.get("metadata"),
+                "created_at": r.get("created_at").isoformat() if r.get("created_at") else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/documents/{document_id}/kg-snapshots/{snapshot_id}")
+async def get_document_kg_snapshot(
+    document_id: str,
+    snapshot_id: str,
+    admin: dict = Depends(get_current_admin),
+):
+    """Get a single immutable KG snapshot with full payload (admin only)."""
+    document_service = DocumentService()
+    document = await document_service.get_document(
+        document_id=document_id,
+        user_id=None,
+        user_role="admin",
+    )
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    db = get_db()
+    if db.pool is None:
+        await db.connect()
+
+    row = await db.fetchrow(
+        """
+        SELECT id, document_id, run_type, snapshot_source, concepts_json_hash, metadata, kg_payload, created_at
+        FROM kg_run_snapshots
+        WHERE id = $1::uuid AND document_id = $2::uuid
+        """,
+        snapshot_id,
+        document_id,
+    )
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="KG snapshot not found",
+        )
+
+    kg_payload = row.get("kg_payload")
+    if isinstance(kg_payload, str):
+        kg_payload = json.loads(kg_payload) if kg_payload.strip() else {}
+    if not isinstance(kg_payload, dict):
+        kg_payload = {}
+
+    return {
+        "id": str(row["id"]),
+        "document_id": str(row["document_id"]),
+        "run_type": row.get("run_type"),
+        "snapshot_source": row.get("snapshot_source"),
+        "concepts_json_hash": row.get("concepts_json_hash"),
+        "metadata": row.get("metadata"),
+        "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+        "kg_payload": kg_payload,
+    }
 
 
 def _is_undefined_table_error(exc: Exception) -> bool:

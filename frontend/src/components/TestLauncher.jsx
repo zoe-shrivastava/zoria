@@ -3,10 +3,21 @@ import { tests } from '../services/api'
 import { showNotification } from '../utils/notifications'
 import LoadingSpinner from './LoadingSpinner'
 
+// Question type options: value -> display label (aligned with backend _get_section_title)
+const QUESTION_TYPE_OPTIONS = [
+  { value: 'multiple_choice', label: 'Multiple Choice' },
+  { value: 'short_answer', label: 'Short Answer' },
+  { value: 'problem_solving', label: 'Problem Solving' },
+  { value: 'conceptual_question', label: 'Conceptual Questions' },
+  { value: 'matching', label: 'Matching' },
+  { value: 'fill_in_the_blank', label: 'Fill in the Blank' },
+]
+
 export default function TestLauncher({ childId, onTestGenerated, userRole, preferredLanguage = null }) {
   const [subjectsData, setSubjectsData] = useState([])
   const [selectedSubject, setSelectedSubject] = useState('')
   const [selectedTopics, setSelectedTopics] = useState([])
+  const [selectedQuestionTypes, setSelectedQuestionTypes] = useState([])
   const [includePrerequisites, setIncludePrerequisites] = useState(false)
   const [difficulty, setDifficulty] = useState('')
   const [numQuestions, setNumQuestions] = useState(10)
@@ -50,6 +61,18 @@ export default function TestLauncher({ childId, onTestGenerated, userRole, prefe
   const handleSubjectChange = (e) => {
     setSelectedSubject(e.target.value)
     setSelectedTopics([]) // Reset topics when subject changes
+    setSelectedQuestionTypes([]) // Reset question types when subject changes
+  }
+
+  // Always show all canonical question types the backend supports. Subject profiles may use
+  // different type names (e.g. conceptual_mcq, numerical_calculation) that don't match our
+  // test-generation types, so we don't filter by profile here to avoid "No question types configured".
+  const getAvailableQuestionTypes = () => QUESTION_TYPE_OPTIONS
+
+  const handleQuestionTypeToggle = (value) => {
+    setSelectedQuestionTypes(prev =>
+      prev.includes(value) ? prev.filter(t => t !== value) : [...prev, value]
+    )
   }
 
   const handleTopicToggle = (topicName) => {
@@ -98,6 +121,10 @@ export default function TestLauncher({ childId, onTestGenerated, userRole, prefe
 
       if (preferredLanguage) {
         testData.language = preferredLanguage
+      }
+
+      if (selectedQuestionTypes.length > 0) {
+        testData.question_types = selectedQuestionTypes
       }
 
       const test = await tests.generate(testData)
@@ -229,6 +256,60 @@ export default function TestLauncher({ childId, onTestGenerated, userRole, prefe
                 />
                 <span>Include prerequisite concepts</span>
               </label>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
+                Question types (optional – leave empty for all types)
+              </label>
+              <div style={{
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.75rem',
+                maxHeight: '200px',
+                overflowY: 'auto',
+                background: 'var(--bg-secondary)',
+              }}>
+                {getAvailableQuestionTypes().length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                    No question types configured for this subject.
+                  </p>
+                ) : (
+                  getAvailableQuestionTypes().map((opt) => (
+                    <label
+                      key={opt.value}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.5rem',
+                        cursor: 'pointer',
+                        borderRadius: 'var(--radius-sm)',
+                        transition: 'background 0.2s',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'var(--bg-tertiary)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedQuestionTypes.includes(opt.value)}
+                        onChange={() => handleQuestionTypeToggle(opt.value)}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                      <span style={{ fontWeight: '500' }}>{opt.label}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              {selectedQuestionTypes.length > 0 && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  {selectedQuestionTypes.length} type{selectedQuestionTypes.length !== 1 ? 's' : ''} selected
+                </div>
+              )}
             </div>
 
             <div>

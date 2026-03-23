@@ -101,11 +101,24 @@ class TestGenerationService:
         include_prerequisites: bool = False,
         difficulty: Optional[str] = None,
         num_questions: int = 10,
-        time_limit_minutes: Optional[int] = None
+        time_limit_minutes: Optional[int] = None,
+        question_types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Create a draft test record for async generation from topics."""
         topics_str = ', '.join(topics)
         test_title = f"Test: {subject} - {topics_str}" if topics else f"Test: {subject}"
+        
+        metadata = {
+            'subject': subject,
+            'topics': topics,
+            'include_prerequisites': include_prerequisites,
+            'difficulty_filter': difficulty,
+            'num_questions': num_questions,
+            'generation_status': 'pending',
+            'mode': 'topics'
+        }
+        if question_types:
+            metadata['question_types'] = question_types
         
         test_id = await self.test_repo.create_test(
             child_id=child_id,
@@ -113,15 +126,7 @@ class TestGenerationService:
             parent_id=parent_id,
             title=test_title,
             time_limit_minutes=time_limit_minutes,
-            metadata={
-                'subject': subject,
-                'topics': topics,
-                'include_prerequisites': include_prerequisites,
-                'difficulty_filter': difficulty,
-                'num_questions': num_questions,
-                'generation_status': 'pending',
-                'mode': 'topics'
-            }
+            metadata=metadata,
         )
         
         test = await self.test_repo.get_test_by_id(test_id)
@@ -700,6 +705,7 @@ class TestGenerationService:
         num_questions: int = 10,
         time_limit_minutes: Optional[int] = None,
         language: Optional[str] = None,
+        question_types: Optional[List[str]] = None,
     ) -> None:
         """Generate questions and attach them to an existing draft test (topics mode)."""
         matched_concept_ids, sections = await self._generate_sections_for_topics(
@@ -710,6 +716,7 @@ class TestGenerationService:
             difficulty=difficulty,
             num_questions=num_questions,
             language=language,
+            question_types=question_types,
         )
         
         # Merge/update metadata on existing test
@@ -747,6 +754,7 @@ class TestGenerationService:
         difficulty: Optional[str],
         num_questions: int,
         language: Optional[str] = None,
+        question_types: Optional[List[str]] = None,
     ):
         """Shared logic: generate sections for a subject/topics combo (no test creation)."""
         # Find concepts that match the topics
@@ -884,12 +892,16 @@ class TestGenerationService:
             from services.knowledge_graph_service import KnowledgeGraphService
             normalized_difficulty = KnowledgeGraphService._normalize_difficulty(normalized_difficulty)
         
+        # Single call: generate num_questions total, optionally restricted to question_types (one LLM call for all types)
+        types_to_generate = question_types if question_types else None
+
         if self.question_gen_service and matched_concept_ids:
             try:
                 gen_results = await self.question_gen_service.generate_all_questions_for_concepts(
                     concept_ids=[str(cid) for cid in matched_concept_ids],
                     num_questions=num_questions,
-                    question_type="multiple_choice",
+                    question_type=(types_to_generate[0] if types_to_generate and len(types_to_generate) == 1 else "multiple_choice"),
+                    question_types=types_to_generate,
                     difficulty=normalized_difficulty,  # Use normalized value
                     grade_level=grade_level,
                     subject_id=subject_id,
@@ -906,12 +918,12 @@ class TestGenerationService:
                 total_generated = 0
                 total_skipped_duplicate = 0
                 total_failed = 0
-                for concept_id_str, questions_list in gen_results.items():
+                for concept_id_str, questions_list in (gen_results or {}).items():
                     # Safety check
                     if questions_list is None:
                         logger.warning(f"questions_list is None for concept {concept_id_str}, skipping")
                         continue
-                        
+                    
                     concept_id_uuid = concept_id_str
                     logger.info(f"Processing {len(questions_list)} questions for concept {concept_id_uuid}")
                     for idx, gen_result in enumerate(questions_list):
@@ -920,24 +932,11 @@ class TestGenerationService:
                             logger.error(f"Invalid gen_result structure at index {idx} for concept {concept_id_uuid}")
                             total_failed += 1
                             continue
-                            
+                        
                         blueprint = gen_result["blueprint"]
                         raw = gen_result.get("raw", {})
                         
                         logger.debug(f"Processing question {idx + 1}/{len(questions_list)} for concept {concept_id_uuid}: {blueprint.question_text[:100]}...")
-                        
-                        # Skip duplicate detection when generating questions for a test
-                        # We want to use the LLM-generated questions even if similar ones exist
-                        # The test will use these specific questions, so duplicates are acceptable
-                        # duplicate_check = await self.question_gen_service.check_semantic_duplicate(
-                        #     blueprint.question_text,
-                        #     concept_id_uuid,
-                        #     similarity_threshold=0.85
-                        # )
-                        # if duplicate_check['is_duplicate']:
-                        #     logger.warning(f"Question duplicate detected for concept {concept_id_uuid}, skipping. Similarity: {duplicate_check.get('max_similarity', 0)}")
-                        #     total_skipped_duplicate += 1
-                        #     continue
                         
                         # Safer options handling
                         options_text = []
@@ -951,7 +950,6 @@ class TestGenerationService:
                         diagram_code = blueprint.metadata.get("diagram_code") or raw.get("metadata", {}).get("diagram_code")
                         # Store blueprint dict and ensure hint is preserved
                         blueprint_dict = blueprint.dict()
-                        # Ensure hint is in the blueprint (it should be, but double-check)
                         if blueprint.hint and not blueprint_dict.get("hint"):
                             blueprint_dict["hint"] = blueprint.hint
                         
@@ -966,7 +964,6 @@ class TestGenerationService:
                             "explanation": blueprint.metadata.get("explanation") or raw.get("explanation", ""),
                             "blueprint": blueprint_dict,
                         }
-                        # Ensure diagram_code is preserved in blueprint metadata
                         if diagram_code:
                             if "blueprint" not in question_data_for_storage:
                                 question_data_for_storage["blueprint"] = {}
@@ -975,7 +972,6 @@ class TestGenerationService:
                                     question_data_for_storage["blueprint"]["metadata"] = {}
                                 question_data_for_storage["blueprint"]["metadata"]["diagram_code"] = diagram_code
                         
-                        # Preserve needs_graph and needs_diagram flags for FRQ questions
                         if blueprint.question_type != "multiple_choice":
                             needs_graph = blueprint.needs_graph or blueprint.metadata.get("needs_graph", False)
                             needs_diagram = blueprint.needs_diagram or blueprint.metadata.get("needs_diagram", False)
@@ -1000,7 +996,6 @@ class TestGenerationService:
                                 question_data_for_storage,
                                 blueprint.question_text
                             )
-                            # Ensure question_id is stored as string for consistent comparison
                             question_id_str = str(question_id)
                             generated_question_ids.add(question_id_str)
                             total_generated += 1
@@ -1043,6 +1038,20 @@ class TestGenerationService:
             all_questions.extend(questions)
         
         logger.info(f"Total questions collected from all concepts: {len(all_questions)}")
+        
+        # Filter by selected question types if specified
+        if question_types:
+            before_type_filter = len(all_questions)
+            type_set = set(question_types)
+            filtered = [q for q in all_questions if (q.get("type") or "short_answer") in type_set]
+            if len(filtered) == 0 and before_type_filter > 0:
+                logger.warning(
+                    f"Question types filter {question_types} left 0 questions (had {before_type_filter}). "
+                    "Using all available question types so the test can be created."
+                )
+            else:
+                all_questions = filtered
+                logger.info(f"After question_types filter {question_types}: {len(all_questions)} questions (was {before_type_filter})")
         
         # Get inclusive difficulty levels and apply filter
         if difficulty:

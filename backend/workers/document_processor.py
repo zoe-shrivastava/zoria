@@ -3,6 +3,8 @@
 import logging
 import asyncio
 import json
+import hashlib
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -104,7 +106,14 @@ class DocumentProcessor:
     
     def __init__(self):
         """Initialize document processor."""
-        self.db = init_db()
+        # Reuse app-level DB when available to avoid replacing the global
+        # singleton (which can invalidate/close the active pool in API runtime).
+        self._owns_db = False
+        try:
+            self.db = get_db()
+        except RuntimeError:
+            self.db = init_db()
+            self._owns_db = True
         self.document_repo = DocumentRepository(self.db)
         self.concept_repo = ConceptRepository(self.db)
         self.question_repo = QuestionRepository(self.db)
@@ -112,6 +121,95 @@ class DocumentProcessor:
         self.chunking_service = ChunkingService()
         self.embedding_service = EmbeddingService()
         self.kg_service = KnowledgeGraphService(self.db, self.embedding_service)
+
+    async def _persist_kg_run_snapshot(
+        self,
+        conn,
+        document_id: str,
+        concept_ids: list,
+        relationships: list,
+        concepts_json: Dict[str, Any],
+        run_type: str,
+    ) -> None:
+        """Persist immutable KG snapshot for this processing run."""
+        if not concept_ids:
+            return
+
+        concept_rows = await conn.fetch(
+            """
+            SELECT c.id, c.name, c.subtopic, c.difficulty
+            FROM concepts c
+            WHERE c.id = ANY($1::uuid[])
+            ORDER BY c.created_at
+            """,
+            concept_ids,
+        )
+
+        difficulty_distribution: Dict[str, int] = {}
+        for c in concept_rows:
+            difficulty = str(c.get("difficulty") or "unknown").strip().lower() or "unknown"
+            difficulty_distribution[difficulty] = difficulty_distribution.get(difficulty, 0) + 1
+
+        prereq_edges = [
+            r for r in relationships
+            if str(r.get("relationship_type") or "").strip().lower() == "prerequisite_of"
+        ]
+        concepts_with_prereqs = {
+            str(r["to_concept_id"]) for r in prereq_edges if r.get("to_concept_id")
+        }
+
+        payload = {
+            "available": True,
+            "reason": None,
+            "all_nodes": len(concept_rows),
+            "all_edges": len(relationships),
+            "difficulty_distribution": difficulty_distribution,
+            "prerequisites": {
+                "total_prerequisite_edges": len(prereq_edges),
+                "concepts_with_prerequisites": len(concepts_with_prereqs),
+            },
+            "nodes": [
+                {
+                    "concept_id": str(c["id"]),
+                    "concept_name": str(c.get("name") or "").strip(),
+                    "subtopic": c.get("subtopic"),
+                    "difficulty": str(c.get("difficulty") or "unknown").strip().lower() or "unknown",
+                }
+                for c in concept_rows
+            ],
+            "edges": [
+                {
+                    "from_concept_id": str(r["from_concept_id"]) if r.get("from_concept_id") else None,
+                    "to_concept_id": str(r["to_concept_id"]) if r.get("to_concept_id") else None,
+                    "from_concept_name": str(r.get("from_concept_name") or "").strip(),
+                    "to_concept_name": str(r.get("to_concept_name") or "").strip(),
+                    "relationship_type": str(r.get("relationship_type") or "").strip().lower(),
+                }
+                for r in prereq_edges
+            ],
+        }
+
+        concepts_json_hash = hashlib.sha256(
+            json.dumps(concepts_json, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+        await conn.execute(
+            """
+            INSERT INTO kg_run_snapshots
+            (document_id, run_type, snapshot_source, concepts_json_hash, kg_payload, metadata)
+            VALUES ($1::uuid, $2, 'from_concepts_json', $3, $4::jsonb, $5::jsonb)
+            """,
+            document_id,
+            run_type,
+            concepts_json_hash,
+            json.dumps(payload),
+            json.dumps(
+                {
+                    "concept_count": len(concept_rows),
+                    "relationship_count": len(relationships),
+                }
+            ),
+        )
     
     async def cleanup_document_data(self, document_id: str) -> None:
         """Clean up existing processing data for a document before reprocessing.
@@ -247,7 +345,8 @@ class DocumentProcessor:
     async def process_document(
         self, 
         document_id: str, 
-        cleanup_first: bool = False
+        cleanup_first: bool = False,
+        run_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Process document in background (Phase 2).
         
@@ -262,6 +361,7 @@ class DocumentProcessor:
         Args:
             document_id: Document UUID
             cleanup_first: If True, delete existing processing data first
+            run_type: Optional explicit run type for KG snapshot ('ingestion'|'rebuild'|'reprocess')
             
         Returns:
             Processing result dictionary
@@ -350,6 +450,36 @@ class DocumentProcessor:
                         document_id,
                         normalized_concepts_list,
                         subject=document_subject  # Pass subject to knowledge graph service
+                    )
+
+                    # Snapshot current run KG from exactly the concept set used in this run.
+                    concept_uuid_ids = [uuid.UUID(str(cid)) for cid in concept_ids] if concept_ids else []
+                    relationships = []
+                    if concept_uuid_ids:
+                        relationships = await conn.fetch(
+                            """
+                            SELECT
+                                cr.from_concept_id,
+                                cr.to_concept_id,
+                                cr.relationship_type,
+                                c_from.name AS from_concept_name,
+                                c_to.name AS to_concept_name
+                            FROM concept_relationships cr
+                            JOIN concepts c_from ON c_from.id = cr.from_concept_id
+                            JOIN concepts c_to ON c_to.id = cr.to_concept_id
+                            WHERE cr.from_concept_id = ANY($1::uuid[])
+                              AND cr.to_concept_id = ANY($1::uuid[])
+                            """,
+                            concept_uuid_ids,
+                        )
+                    effective_run_type = run_type or ("reprocess" if cleanup_first else "ingestion")
+                    await self._persist_kg_run_snapshot(
+                        conn=conn,
+                        document_id=document_id,
+                        concept_ids=concept_uuid_ids,
+                        relationships=relationships,
+                        concepts_json=concepts_json,
+                        run_type=effective_run_type,
                     )
                     
                     # Step 2: Create questions and visuals
@@ -524,15 +654,24 @@ class DocumentProcessor:
             pass
 
 
-async def process_document_async(document_id: str, cleanup_first: bool = False) -> Dict[str, Any]:
+async def process_document_async(
+    document_id: str,
+    cleanup_first: bool = False,
+    run_type: Optional[str] = None,
+) -> Dict[str, Any]:
     """Async wrapper for document processing (for background tasks).
     
     Args:
         document_id: Document UUID
         cleanup_first: If True, cleanup existing data first
+        run_type: Optional explicit run type for KG snapshot
         
     Returns:
         Processing result
     """
     processor = DocumentProcessor()
-    return await processor.process_document(document_id, cleanup_first=cleanup_first)
+    return await processor.process_document(
+        document_id,
+        cleanup_first=cleanup_first,
+        run_type=run_type,
+    )

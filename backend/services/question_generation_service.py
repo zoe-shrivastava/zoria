@@ -629,13 +629,15 @@ IMPORTANT: Generate exactly {num_questions} questions. The "questions" array mus
         selected_topics: Optional[List[str]] = None,
         subject_profile: Optional[Dict[str, Any]] = None,
         language: Optional[str] = None,
+        question_types: Optional[List[str]] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Generate all questions for multiple concepts in a single LLM request.
         
         Args:
             concept_ids: List of concept UUIDs
             num_questions: Total number of questions to generate
-            question_type: Type of question to generate
+            question_type: Used when question_types is None or single; type of question to generate
+            question_types: If set with 2+ types, generate num_questions total with a mix of these types (one call)
             difficulty: Difficulty level
             grade_level: Grade level for age-appropriate language
             subject_id: Subject ID for subject-specific generation rules
@@ -828,6 +830,14 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
         if format_rules:
             system_prompt += f"\n\nFormat requirements:\n{format_rules}"
 
+        # One call for all types: either single type (question_type) or mixed (question_types with 2+)
+        use_mixed_types = question_types and len(question_types) > 1
+        if use_mixed_types:
+            types_str = ", ".join(question_types)
+            type_instruction = f"Generate exactly {num_questions} questions in total. Each question's \"question_type\" must be one of: **{types_str}**. Use a mix (e.g. some multiple_choice, some short_answer, some problem_solving) so the test has variety."
+        else:
+            type_instruction = f"Using the Context provided, generate {num_questions} questions of type **{question_type}**."
+
         # Subtopics for these concepts = granular concept names (e.g. Speed & Velocity), not the broad topic.
         prompt = f"""## User Input
 
@@ -836,7 +846,7 @@ Generate ALL of the following in **{output_language}** only: question_text, opti
 **Subtopics for these concepts:** {concepts_list_str}
 
 **Instruction for AI:**
-Using the Context provided, generate {num_questions} questions.
+{type_instruction}
 - If the Context includes Absolute Value equations, generate questions identifying the graph's vertex or direction.
 - If the Context includes Sequences, generate word problems (e.g., money saved over weeks) rather than raw number lists.
 - Ensure the 'error_pattern_map' specifically names which "common_mistakes_pattern" from the profile was used to create each distractor.

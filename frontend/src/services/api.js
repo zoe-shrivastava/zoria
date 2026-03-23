@@ -240,6 +240,48 @@ export const admin = {
       method: 'POST',
     }),
 
+  evaluateMarkdownToConcepts: (documentId) =>
+    apiRequest(`/api/v1/admin/documents/${documentId}/evaluate-md-concepts`, {
+      method: 'GET',
+    }),
+
+  listKgSnapshots: (documentId, limit = 20, offset = 0) =>
+    apiRequest(
+      `/api/v1/admin/documents/${documentId}/kg-snapshots?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`,
+      { method: 'GET' }
+    ),
+
+  evaluateConceptsToKnowledgeGraph: async (
+    documentId,
+    { snapshotId = null, useLatestSnapshot = true, ingestionOnly = true } = {}
+  ) => {
+    let effectiveSnapshotId = snapshotId
+
+    // Prefer immutable snapshot evaluation when available.
+    if (!effectiveSnapshotId && useLatestSnapshot) {
+      try {
+        const snapshots = await apiRequest(
+          `/api/v1/admin/documents/${documentId}/kg-snapshots?limit=1&offset=0`,
+          { method: 'GET' }
+        )
+        effectiveSnapshotId = snapshots?.snapshots?.[0]?.id || null
+      } catch (_) {
+        // Snapshot endpoint may not be available yet on older backend;
+        // fall back to live ingestion-only evaluation.
+      }
+    }
+
+    const queryParams = new URLSearchParams()
+    if (effectiveSnapshotId) queryParams.append('snapshot_id', effectiveSnapshotId)
+    if (!effectiveSnapshotId) queryParams.append('ingestion_only', ingestionOnly ? 'true' : 'false')
+    const query = queryParams.toString()
+
+    return apiRequest(
+      `/api/v1/admin/documents/${documentId}/evaluate-concepts-kg${query ? `?${query}` : ''}`,
+      { method: 'GET' }
+    )
+  },
+
   getKnowledgeGraph: (documentId, ingestionOnly = false) => {
     const url = ingestionOnly
       ? `/api/v1/admin/documents/${documentId}/knowledge-graph?ingestion_only=true`
