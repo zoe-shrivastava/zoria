@@ -1176,6 +1176,13 @@ async def reevaluate_test(
         
         # Re-run evaluation
         scoring_result = await scoring_service.grade_test(test_id)
+
+        # Refresh completion timestamp so UI reflects latest reevaluation time
+        await test_repo.update_test_status(
+            test_id,
+            'completed',
+            completed_at=datetime.utcnow()
+        )
         
         # Update mastery scores based on new evaluation
         # The method gets child_id from the test itself

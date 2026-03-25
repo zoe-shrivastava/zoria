@@ -45,6 +45,16 @@ def uuid_to_str(value):
     return str(value) if hasattr(value, '__str__') else value
 
 
+def question_id_for_test_response(q: dict) -> str:
+    """Stable string id for TestQuestionResponse (canonical question or test_questions row)."""
+    for key in ("question_id", "id", "test_question_id"):
+        s = uuid_to_str(q.get(key))
+        if s:
+            return s
+    # Defensive: should not happen when DB COALESCE includes tq.id
+    raise ValueError("Test question row is missing question_id, id, and test_question_id")
+
+
 def get_embedding_service() -> EmbeddingService:
     """Dependency to get embedding service."""
     return EmbeddingService()
@@ -71,18 +81,20 @@ def get_llm_service() -> LLMService:
 
 def get_evaluation_llm_service() -> LLMService:
     """Dependency to get LLM service for evaluation (uses local Ollama)."""
-    # Use local Ollama for evaluation
+    # Use configurable model for strict evaluation scoring
+    model = settings.EVALUATION_MODEL
+    logger.info("Evaluation scoring using model: %s", model)
     try:
         from core.database import get_db
         return LLMService(
-            model_name="llama3.1",
+            model_name=model,
             enable_logging=True,
             context_source="evaluation"
         )
     except Exception:
         # Fallback if database not available
         return LLMService(
-            model_name="llama3.1",
+            model_name=model,
             enable_logging=False,
             context_source="evaluation"
         )
@@ -443,7 +455,7 @@ async def generate_test(
         # Convert to response model
         questions = [
             TestQuestionResponse(
-                question_id=uuid_to_str(q.get('question_id', q.get('id'))),
+                question_id=question_id_for_test_response(q),
                 text=q.get('text', ''),
                 type=q.get('type', 'short_answer'),
                 difficulty=q.get('difficulty'),
@@ -655,7 +667,7 @@ async def get_test(
             
             questions.append(
                 TestQuestionResponse(
-                    question_id=uuid_to_str(q.get('question_id', q.get('id'))),
+                    question_id=question_id_for_test_response(q),
                     text=q.get('text', ''),
                     type=q.get('type', 'short_answer'),
                     difficulty=q.get('difficulty'),
@@ -902,7 +914,7 @@ async def start_test(
         
         questions = [
             TestQuestionResponse(
-                question_id=uuid_to_str(q.get('question_id', q.get('id'))),
+                question_id=question_id_for_test_response(q),
                 text=q.get('text', ''),
                 type=q.get('type', 'short_answer'),
                 difficulty=q.get('difficulty'),
@@ -993,6 +1005,8 @@ async def save_answer(
         
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error(f"Error saving answer: {e}", exc_info=True)
         raise HTTPException(

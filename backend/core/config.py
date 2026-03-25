@@ -55,6 +55,14 @@ class Settings:
 
     # Question generation: model for generating quiz questions (e.g. "gpt-5-nano" or "llama3.1")
     QUESTION_GENERATION_MODEL: str = os.getenv("QUESTION_GENERATION_MODEL", "gpt-5-nano")
+    # Evaluation: strict scoring model (defaults to Llama)
+    EVALUATION_MODEL: str = os.getenv("EVALUATION_MODEL", "llama3.1")
+    # Optional separate model for explanatory feedback (defaults to Llama)
+    EVALUATION_FEEDBACK_MODEL: str = os.getenv("EVALUATION_FEEDBACK_MODEL", "llama3.1")
+    # If true, use EVALUATION_FEEDBACK_MODEL for student-facing explanation
+    EVALUATION_USE_SEPARATE_FEEDBACK: bool = os.getenv(
+        "EVALUATION_USE_SEPARATE_FEEDBACK", "true"
+    ).lower() == "true"
     
     @classmethod
     def ensure_upload_dir(cls) -> None:

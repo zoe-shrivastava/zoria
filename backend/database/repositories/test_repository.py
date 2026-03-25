@@ -117,7 +117,7 @@ class TestRepository:
                 COALESCE(tq.question_type, q.type) as type,
                 COALESCE(tq.question_difficulty, q.difficulty) as difficulty,
                 COALESCE(tq.question_metadata, q.metadata) as metadata,
-                COALESCE(tq.original_question_id, tq.question_id, q.id) as question_id,
+                COALESCE(tq.original_question_id, tq.question_id, q.id, tq.id) as question_id,
                 tr.id as response_id,
                 tr.answer,
                 tr.score,
@@ -132,6 +132,7 @@ class TestRepository:
                 FROM test_responses
                 WHERE test_id = tq.test_id
                   AND (question_id = tq.question_id OR question_id = tq.original_question_id)
+                ORDER BY submitted_at DESC NULLS LAST, id DESC
                 LIMIT 1
             ) tr ON true
             WHERE tq.test_id = $1
@@ -461,6 +462,60 @@ class TestRepository:
         )
         return junction_id
     
+    async def resolve_question_id_for_response(self, test_id: str, client_question_id: str) -> str:
+        """Map UI/client id to a questions.id suitable for test_responses FK.
+
+        Accepts canonical question id, original_question_id, or test_questions.id (junction row).
+        """
+        row = await self.db.fetchrow(
+            """
+            SELECT COALESCE(tq.original_question_id, tq.question_id) AS qref
+            FROM test_questions tq
+            WHERE tq.test_id = $1::uuid
+              AND (
+                tq.id = $2::uuid
+                OR tq.question_id = $2::uuid
+                OR tq.original_question_id = $2::uuid
+              )
+            LIMIT 1
+            """,
+            test_id,
+            client_question_id,
+        )
+        if row:
+            if row["qref"] is not None:
+                return str(row["qref"])
+            raise ValueError(
+                "This test question is a snapshot only (original question was removed). "
+                "Regenerate the test to answer it."
+            )
+        # Client may still send a bare questions.id that matches this test via join
+        bare = await self.db.fetchval(
+            """
+            SELECT COALESCE(tq.original_question_id, tq.question_id)
+            FROM test_questions tq
+            WHERE tq.test_id = $1::uuid AND tq.question_id = $2::uuid
+            LIMIT 1
+            """,
+            test_id,
+            client_question_id,
+        )
+        if bare is not None:
+            return str(bare)
+        bare_orig = await self.db.fetchval(
+            """
+            SELECT COALESCE(tq.original_question_id, tq.question_id)
+            FROM test_questions tq
+            WHERE tq.test_id = $1::uuid AND tq.original_question_id = $2::uuid
+            LIMIT 1
+            """,
+            test_id,
+            client_question_id,
+        )
+        if bare_orig is not None:
+            return str(bare_orig)
+        raise ValueError(f"Question {client_question_id} is not part of this test")
+
     async def save_response(
         self,
         test_id: str,
@@ -482,6 +537,7 @@ class TestRepository:
             Response ID
         """
         import json
+        question_id = await self.resolve_question_id_for_response(test_id, question_id)
         response_id = str(uuid.uuid4())
         
         # Store behavioral data in metadata JSONB field if available
@@ -543,12 +599,36 @@ class TestRepository:
             detailed_feedback: Detailed feedback about what is wrong or correct
         """
         # Try to update with metadata, fallback if column doesn't exist
+        #
+        # IMPORTANT:
+        # A response can be saved against either question_id or original_question_id
+        # depending on when/how the test was created. For reevaluation, we must
+        # resolve both aliases and update whichever response row exists.
         try:
             # Update metadata with evaluation results
             existing_metadata = await self.db.fetchval(
                 """
-                SELECT metadata FROM test_responses
-                WHERE test_id = $1 AND question_id = $2
+                WITH qids AS (
+                    SELECT DISTINCT qid
+                    FROM (
+                        SELECT tq.question_id AS qid
+                        FROM test_questions tq
+                        WHERE tq.test_id = $1
+                          AND (tq.question_id = $2 OR tq.original_question_id = $2)
+                        UNION
+                        SELECT tq.original_question_id AS qid
+                        FROM test_questions tq
+                        WHERE tq.test_id = $1
+                          AND (tq.question_id = $2 OR tq.original_question_id = $2)
+                    ) q
+                    WHERE qid IS NOT NULL
+                )
+                SELECT tr.metadata
+                FROM test_responses tr
+                WHERE tr.test_id = $1
+                  AND tr.question_id IN (SELECT qid FROM qids)
+                ORDER BY tr.submitted_at DESC NULLS LAST, tr.id DESC
+                LIMIT 1
                 """,
                 test_id, question_id
             )
@@ -589,9 +669,25 @@ class TestRepository:
             
             await self.db.execute(
                 """
+                WITH qids AS (
+                    SELECT DISTINCT qid
+                    FROM (
+                        SELECT tq.question_id AS qid
+                        FROM test_questions tq
+                        WHERE tq.test_id = $4
+                          AND (tq.question_id = $5 OR tq.original_question_id = $5)
+                        UNION
+                        SELECT tq.original_question_id AS qid
+                        FROM test_questions tq
+                        WHERE tq.test_id = $4
+                          AND (tq.question_id = $5 OR tq.original_question_id = $5)
+                    ) q
+                    WHERE qid IS NOT NULL
+                )
                 UPDATE test_responses
                 SET score = $1, is_correct = $2, metadata = $3::jsonb
-                WHERE test_id = $4 AND question_id = $5
+                WHERE test_id = $4
+                  AND question_id IN (SELECT qid FROM qids)
                 """,
                 score, is_correct, metadata_json, test_id, question_id
             )
@@ -602,9 +698,25 @@ class TestRepository:
                 logger.warning(f"Metadata column not found in test_responses, updating without evaluation metadata. Run migration 016 to enable full tracking.")
                 await self.db.execute(
                     """
+                    WITH qids AS (
+                        SELECT DISTINCT qid
+                        FROM (
+                            SELECT tq.question_id AS qid
+                            FROM test_questions tq
+                            WHERE tq.test_id = $3
+                              AND (tq.question_id = $4 OR tq.original_question_id = $4)
+                            UNION
+                            SELECT tq.original_question_id AS qid
+                            FROM test_questions tq
+                            WHERE tq.test_id = $3
+                              AND (tq.question_id = $4 OR tq.original_question_id = $4)
+                        ) q
+                        WHERE qid IS NOT NULL
+                    )
                     UPDATE test_responses
                     SET score = $1, is_correct = $2
-                    WHERE test_id = $3 AND question_id = $4
+                    WHERE test_id = $3
+                      AND question_id IN (SELECT qid FROM qids)
                     """,
                     score, is_correct, test_id, question_id
                 )
@@ -627,7 +739,7 @@ class TestRepository:
                 UPDATE test_responses
                 SET score = NULL,
                     is_correct = NULL,
-                    metadata = metadata - 'error_type' - 'misconception' - 'method_detected'
+                    metadata = metadata - 'error_type' - 'misconception' - 'method_detected' - 'detailed_feedback'
                 WHERE test_id = $1
                 """,
                 test_id
@@ -702,6 +814,7 @@ class TestRepository:
                 SELECT score FROM test_responses
                 WHERE test_id = tq.test_id
                   AND (question_id = tq.question_id OR question_id = tq.original_question_id)
+                ORDER BY submitted_at DESC NULLS LAST, id DESC
                 LIMIT 1
             ) tr ON true
             WHERE tq.test_id = $1

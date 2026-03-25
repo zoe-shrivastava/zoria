@@ -24,32 +24,43 @@ export default function StudyGuide({
   const [currentCardIndex, setCurrentCardIndex] = useState(0)
   const [showRevisionCards, setShowRevisionCards] = useState(false)
   const contentRef = useRef(null)
+  const pollTokenRef = useRef(0)
 
   useEffect(() => {
     loadGuide()
   }, [guideId])
 
   const loadGuide = async () => {
+    const currentToken = ++pollTokenRef.current
     try {
       setLoading(true)
       const data = await tests.getStudyGuide(guideId)
+      if (currentToken !== pollTokenRef.current) return
       setGuide(data)
-      // If backend is still regenerating, show generating state and poll until ready
+      // If backend is still regenerating, do not block initial render.
+      // Poll in background and refresh when ready.
       if (data?.metadata?.regeneration_status === 'in_progress') {
         setRegenerating(true)
-        try {
-          await tests.pollStudyGuideUntilReady(guideId)
-          const updated = await tests.getStudyGuide(guideId)
-          setGuide(updated)
-        } finally {
-          setRegenerating(false)
-        }
+        ;(async () => {
+          try {
+            await tests.pollStudyGuideUntilReady(guideId, { intervalMs: 3000, maxPolls: 40 })
+            if (currentToken !== pollTokenRef.current) return
+            const updated = await tests.getStudyGuide(guideId)
+            if (currentToken !== pollTokenRef.current) return
+            setGuide(updated)
+          } catch (err) {
+            if (currentToken !== pollTokenRef.current) return
+            console.warn('Background guide refresh polling ended:', err)
+          } finally {
+            if (currentToken === pollTokenRef.current) setRegenerating(false)
+          }
+        })()
       }
     } catch (err) {
       console.error('Failed to load study guide:', err)
       showNotification(err.message || 'Failed to load study guide', 'error')
     } finally {
-      setLoading(false)
+      if (currentToken === pollTokenRef.current) setLoading(false)
     }
   }
 
@@ -91,6 +102,9 @@ export default function StudyGuide({
   // Generate revision cards from study guide data
   // Priority: Use LLM-generated cards from backend, fallback to regex extraction
   const revisionCards = useMemo(() => {
+    // Revision cards view is disabled in this screen; skip expensive extraction
+    // so opening a guide stays responsive even for large markdown.
+    if (!showRevisionCards) return []
     if (!guide) return []
     
     // First, try to use revision cards from backend (LLM-generated)
@@ -323,7 +337,7 @@ export default function StudyGuide({
     }
     
     return cards
-  }, [guide])
+  }, [guide, showRevisionCards])
   
   const handleCardFlip = (isFlipped) => {
     // Optional: track card interactions

@@ -98,13 +98,13 @@ class HeuristicEvaluator:
                 return True, max_score, "numeric_match_with_units", ErrorType.NONE, None
             elif numeric_match and not unit_match:
                 # Correct number, wrong unit - partial credit
-                partial_score = max_score * 0.8  # 20% penalty for unit error
+                partial_score = max_score * 0.9  # 10% penalty for unit error
                 return False, partial_score, "numeric_match_unit_mismatch", ErrorType.UNIT_MISMATCH, misconception
             elif not numeric_match and unit_match:
                 # Wrong number, correct unit - check if within tolerance
                 if self._check_numeric_tolerance(student_nums, correct_nums, tolerance_multiplier=2.0):
                     # Within 2x tolerance - partial credit
-                    partial_score = max_score * 0.5
+                    partial_score = max_score * 0.6
                     return False, partial_score, "numeric_close_match", ErrorType.ARITHMETIC, "Calculation error"
                 else:
                     # Way off - no credit
